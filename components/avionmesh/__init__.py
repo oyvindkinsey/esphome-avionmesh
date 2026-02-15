@@ -63,16 +63,13 @@ AvionMeshHub = avionmesh_ns.class_(
     esp32_ble.GATTcEventHandler,
 )
 
-CONFIG_SCHEMA = (
-    cv.Schema(
-        {
-            cv.GenerateID(): cv.declare_id(AvionMeshHub),
-            cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
-            cv.Optional(CONF_PASSPHRASE): validate_passphrase,
-        }
-    )
-    .extend(cv.COMPONENT_SCHEMA)
-)
+CONFIG_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.declare_id(AvionMeshHub),
+        cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
+        cv.Optional(CONF_PASSPHRASE): validate_passphrase,
+    }
+).extend(cv.COMPONENT_SCHEMA)
 
 
 async def to_code(config):
@@ -86,22 +83,23 @@ async def to_code(config):
     if CONF_PASSPHRASE in config:
         cg.add(var.set_passphrase(config[CONF_PASSPHRASE]))
 
-    add_idf_sdkconfig_option("CONFIG_BT_GATTC_ENABLE", True)
-    add_idf_sdkconfig_option("CONFIG_BT_GATTS_ENABLE", True)
-    esp32_ble.register_gap_event_handler(parent, var)
-    esp32_ble.register_gap_scan_event_handler(parent, var)
-    esp32_ble.register_gattc_event_handler(parent, var)
-
-    # Include paths for C++20 libraries
-    lib_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
-    cg.add_build_flag(f"-I{lib_dir}/recsrmesh/include")
-    cg.add_build_flag(f"-I{lib_dir}/avionmesh/include")
-
-    # Add library source files to build
-    cg.add_platformio_option("lib_extra_dirs", [lib_dir])
+    # Declare C++ library dependencies (fetched at compile time)
+    cg.add_library(
+        name="recsrmesh",
+        version=None,
+        repository="https://github.com/oyvindkinsey/recsrmesh-cpp",
+    )
+    cg.add_library(
+        name="avionmesh",
+        version=None,
+        repository="https://github.com/oyvindkinsey/avionmesh-cpp",
+    )
 
     # C++20 for the libraries
     cg.add_build_flag("-std=gnu++20")
+    esp32_ble.register_gap_event_handler(parent, var)
+    esp32_ble.register_gap_scan_event_handler(parent, var)
+    esp32_ble.register_gattc_event_handler(parent, var)
 
     # Patch src/CMakeLists.txt to add mbedtls dependency for ESP-IDF linking
     script_path = os.path.join(os.path.dirname(__file__), "fix_cmake.py")
@@ -126,11 +124,7 @@ async def to_code(config):
         f.write("#include <cstdint>\n")
         f.write("#include <cstddef>\n\n")
         f.write("// Auto-generated from web.html — do not edit\n")
-        f.write(
-            f"static const uint8_t AVIONMESH_WEB_HTML[] = {{\n"
-        )
+        f.write(f"static const uint8_t AVIONMESH_WEB_HTML[] = {{\n")
         f.write(",\n".join(f"    {line}" for line in hex_lines))
         f.write("\n};\n\n")
-        f.write(
-            f"static const size_t AVIONMESH_WEB_HTML_SIZE = {len(compressed)};\n"
-        )
+        f.write(f"static const size_t AVIONMESH_WEB_HTML_SIZE = {len(compressed)};\n")
