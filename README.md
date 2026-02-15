@@ -78,7 +78,7 @@ web_server:
 
 # Load required external components
 external_components:
-  - source: github://oyvindkinsey/avion-esphome
+  - source: github://oyvindkinsey/esphome-avionmesh
     components: [avionmesh]
 
 # Avi-on mesh configuration
