@@ -1,6 +1,0 @@
-[submodule "lib/avionmesh"]
-	path = lib/avionmesh
-	url = https://github.com/oyvindkinsey/avionmesh-cpp
-[submodule "lib/recsrmesh"]
-	path = lib/recsrmesh
-	url = https://github.com/oyvindkinsey/recsrmesh-cpp
