@@ -78,22 +78,17 @@ async def to_code(config):
 
     parent = await cg.get_variable(config[esp32_ble.CONF_BLE_ID])
     cg.add_define("USE_ESP32_BLE_CLIENT")
+    add_idf_sdkconfig_option("CONFIG_BT_GATTC_ENABLE", True)
+    add_idf_sdkconfig_option("CONFIG_BT_GATTS_ENABLE", True)
 
     # Passphrase is now optional - stored in NVS instead of config
     if CONF_PASSPHRASE in config:
         cg.add(var.set_passphrase(config[CONF_PASSPHRASE]))
 
-    # Declare C++ library dependencies (fetched at compile time)
-    cg.add_library(
-        name="recsrmesh",
-        version=None,
-        repository="https://github.com/oyvindkinsey/recsrmesh-cpp",
-    )
-    cg.add_library(
-        name="avionmesh",
-        version=None,
-        repository="https://github.com/oyvindkinsey/avionmesh-cpp",
-    )
+    # Download libraries via lib_deps (compiled via fix_cmake.py for ESP-IDF)
+    cg.add_platformio_option("lib_deps", [
+        "https://github.com/oyvindkinsey/avionmesh-cpp.git"
+    ])
 
     # C++20 for the libraries
     cg.add_build_flag("-std=gnu++20")
