@@ -7,6 +7,7 @@
 #include "esphome/components/web_server_base/web_server_base.h"
 
 #include <esp_http_server.h>
+#include <sys/socket.h>
 #include <cstring>
 
 static const char *TAG = "avionmesh.web";
@@ -90,25 +91,171 @@ void AvionMeshWebHandler::send_event(const char *event, const std::string &data)
     for (auto *ses : sse_sessions_) {
         int fd = ses->fd.load();
         if (fd != 0) {
-            int ret = httpd_socket_send(ses->hd, fd, chunk.c_str(), chunk.size(), 0);
+            int ret = httpd_socket_send(ses->hd, fd, chunk.c_str(), chunk.size(), MSG_DONTWAIT);
             if (ret < 0) {
-                ESP_LOGW(TAG, "SSE send failed (fd=%d, err=%d)", fd, ret);
+                ESP_LOGW(TAG, "SSE send failed (fd=%d), closing session", fd);
+                httpd_sess_trigger_close(ses->hd, fd);
+                ses->fd.store(0);
             }
         }
     }
 }
 
-void AvionMeshWebHandler::sse_loop() {
-    std::lock_guard<std::mutex> lock(sse_mutex_);
-    for (size_t i = 0; i < sse_sessions_.size();) {
-        if (sse_sessions_[i]->fd.load() == 0) {
-            ESP_LOGD(TAG, "Removing dead SSE session");
-            delete sse_sessions_[i];
-            sse_sessions_[i] = sse_sessions_.back();
-            sse_sessions_.pop_back();
-        } else {
-            ++i;
+void AvionMeshWebHandler::send_event_to(SseSession *session, const char *event,
+                                         const std::string &data) {
+    int fd = session->fd.load();
+    if (fd == 0)
+        return;
+
+    std::string payload;
+    payload.reserve(data.size() + 48);
+    if (event && *event) {
+        payload += "event: ";
+        payload += event;
+        payload += "\r\n";
+    }
+    payload += "data: ";
+    payload += data;
+    payload += "\r\n\r\n";
+
+    char header[16];
+    snprintf(header, sizeof(header), "%08x\r\n", (unsigned) payload.size());
+
+    std::string chunk;
+    chunk.reserve(payload.size() + 16);
+    chunk += header;
+    chunk += payload;
+    chunk += "\r\n";
+
+    int ret = httpd_socket_send(session->hd, fd, chunk.c_str(), chunk.size(), MSG_DONTWAIT);
+    if (ret < 0) {
+        ESP_LOGW(TAG, "SSE unicast failed (fd=%d), closing session", fd);
+        httpd_sess_trigger_close(session->hd, fd);
+        session->fd.store(0);
+    }
+}
+
+void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
+    auto &db = hub_->db_;
+    auto &states = hub_->device_states_;
+
+    // Meta event
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"ble_state\":%u,\"mesh_initialized\":%s,\"rx_count\":%u}",
+                 static_cast<uint8_t>(hub_->ble_state_),
+                 hub_->mesh_initialized_ ? "true" : "false",
+                 hub_->rx_count_);
+        send_event_to(session, "meta", buf);
+        if (session->fd.load() == 0) return;
+    }
+
+    // Devices in batches of 5
+    {
+        auto &devs = db.devices();
+        static constexpr size_t BATCH = 5;
+        for (size_t i = 0; i < devs.size(); i += BATCH) {
+            std::string json = "{\"devices\":[";
+            size_t end = std::min(i + BATCH, devs.size());
+            for (size_t j = i; j < end; j++) {
+                auto &dev = devs[j];
+                if (j > i) json += ",";
+                json += "{\"avion_id\":";
+                json += std::to_string(dev.avion_id);
+                json += ",\"name\":\"";
+                json += dev.name;
+                json += "\",\"product_type\":";
+                json += std::to_string(dev.product_type);
+                json += ",\"product_name\":\"";
+                json += product_name(dev.product_type);
+                json += "\",\"groups\":[";
+                for (size_t g = 0; g < dev.groups.size(); g++) {
+                    if (g > 0) json += ",";
+                    json += std::to_string(dev.groups[g]);
+                }
+                json += "]";
+
+                auto sit = states.find(dev.avion_id);
+                if (sit != states.end() && sit->second.brightness_known) {
+                    json += ",\"brightness\":";
+                    json += std::to_string(sit->second.brightness);
+                    if (sit->second.color_temp_known) {
+                        json += ",\"color_temp\":";
+                        json += std::to_string(sit->second.color_temp);
+                    }
+                }
+                json += "}";
+            }
+            json += "]}";
+            send_event_to(session, "devices", json);
+            if (session->fd.load() == 0) return;
         }
+    }
+
+    // Groups in batches of 5
+    {
+        auto &grps = db.groups();
+        static constexpr size_t BATCH = 5;
+        for (size_t i = 0; i < grps.size(); i += BATCH) {
+            std::string json = "{\"groups\":[";
+            size_t end = std::min(i + BATCH, grps.size());
+            for (size_t j = i; j < end; j++) {
+                auto &grp = grps[j];
+                if (j > i) json += ",";
+                json += "{\"group_id\":";
+                json += std::to_string(grp.group_id);
+                json += ",\"name\":\"";
+                json += grp.name;
+                json += "\",\"members\":[";
+                for (size_t m = 0; m < grp.member_ids.size(); m++) {
+                    if (m > 0) json += ",";
+                    json += std::to_string(grp.member_ids[m]);
+                }
+                json += "]}";
+            }
+            json += "]}";
+            send_event_to(session, "groups", json);
+            if (session->fd.load() == 0) return;
+        }
+    }
+
+    send_event_to(session, "sync_complete", "{}");
+    session->sync_pending = false;
+}
+
+void AvionMeshWebHandler::reset_sync() {
+    std::lock_guard<std::mutex> lock(sse_mutex_);
+    for (auto *ses : sse_sessions_) {
+        ses->sync_pending = true;
+    }
+}
+
+void AvionMeshWebHandler::sse_loop() {
+    // Collect pending sessions under lock, then sync outside lock
+    // (send_initial_sync can block on socket writes)
+    SseSession *pending[MAX_SSE_SESSIONS];
+    size_t pending_count = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(sse_mutex_);
+        for (size_t i = 0; i < sse_sessions_.size();) {
+            if (sse_sessions_[i]->fd.load() == 0) {
+                ESP_LOGD(TAG, "Removing dead SSE session");
+                delete sse_sessions_[i];
+                sse_sessions_[i] = sse_sessions_.back();
+                sse_sessions_.pop_back();
+            } else {
+                if (sse_sessions_[i]->sync_pending)
+                    pending[pending_count++] = sse_sessions_[i];
+                ++i;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < pending_count; i++) {
+        if (pending[i]->fd.load() != 0)
+            send_initial_sync(pending[i]);
     }
 }
 
@@ -125,8 +272,6 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
 
     if (url == "/avionmesh") {
         handle_index(request);
-    } else if (url == "/avionmesh/api/status" && method == HTTP_GET) {
-        handle_status(request);
     } else if (url == "/avionmesh/api/events" && method == HTTP_GET) {
         handle_events(request);
     } else if (url == "/avionmesh/api/discover_mesh" && method == HTTP_POST) {
@@ -153,8 +298,6 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
         handle_remove_from_group(request);
     } else if (url == "/avionmesh/api/import" && method == HTTP_POST) {
         handle_import(request);
-    } else if (url == "/avionmesh/api/cloud_import" && method == HTTP_POST) {
-        handle_cloud_import_post(request);
     } else if (url == "/avionmesh/api/set_passphrase" && method == HTTP_POST) {
         handle_set_passphrase(request);
     } else if (url == "/avionmesh/api/generate_passphrase" && method == HTTP_POST) {
@@ -169,16 +312,33 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
 std::string AvionMeshWebHandler::read_body(AsyncWebServerRequest *request) {
     httpd_req_t *req = *request;
     size_t len = req->content_len;
-    if (len == 0 || len > 4096)
+    ESP_LOGI(TAG, "read_body: content_len=%zu", len);
+
+    if (len == 0 || len > 16384) {  // 16KB limit for import requests
+        ESP_LOGW(TAG, "read_body: invalid len=%zu", len);
         return {};
+    }
 
     std::string body;
     body.resize(len);
-    int ret = httpd_req_recv(req, &body[0], len);
-    if (ret <= 0)
-        return {};
+    size_t total_read = 0;
 
-    body.resize(ret);
+    // Loop to read all data - ESPhttpd may not buffer everything at once
+    while (total_read < len) {
+        int ret = httpd_req_recv(req, &body[total_read], len - total_read);
+        ESP_LOGD(TAG, "read_body loop: recv=%d total=%zu", ret, total_read);
+        if (ret <= 0) {
+            if (total_read == 0) {
+                ESP_LOGW(TAG, "read_body: no data available");
+                return {};
+            }
+            break;
+        }
+        total_read += ret;
+    }
+
+    body.resize(total_read);
+    ESP_LOGI(TAG, "read_body: returning %zu bytes", total_read);
     return body;
 }
 
@@ -204,73 +364,23 @@ void AvionMeshWebHandler::handle_index(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-void AvionMeshWebHandler::handle_status(AsyncWebServerRequest *request) {
-    auto &db = hub_->db_;
-    auto &states = hub_->device_states_;
-
-    std::string json = "{\"ble_state\":";
-    json += std::to_string(static_cast<uint8_t>(hub_->ble_state_));
-    json += ",\"mesh_initialized\":";
-    json += hub_->mesh_initialized_ ? "true" : "false";
-    json += ",\"rx_count\":";
-    json += std::to_string(hub_->rx_count_);
-    json += ",\"devices\":[";
-
-    bool first = true;
-    for (auto &dev : db.devices()) {
-        if (!first) json += ",";
-        first = false;
-        json += "{\"avion_id\":";
-        json += std::to_string(dev.avion_id);
-        json += ",\"name\":\"";
-        json += dev.name;
-        json += "\",\"product_type\":";
-        json += std::to_string(dev.product_type);
-        json += ",\"product_name\":\"";
-        json += product_name(dev.product_type);
-        json += "\",\"groups\":[";
-        for (size_t i = 0; i < dev.groups.size(); i++) {
-            if (i > 0) json += ",";
-            json += std::to_string(dev.groups[i]);
-        }
-        json += "]";
-
-        auto sit = states.find(dev.avion_id);
-        if (sit != states.end() && sit->second.brightness_known) {
-            json += ",\"brightness\":";
-            json += std::to_string(sit->second.brightness);
-            if (sit->second.color_temp_known) {
-                json += ",\"color_temp\":";
-                json += std::to_string(sit->second.color_temp);
-            }
-        }
-        json += "}";
-    }
-
-    json += "],\"groups\":[";
-
-    first = true;
-    for (auto &grp : db.groups()) {
-        if (!first) json += ",";
-        first = false;
-        json += "{\"group_id\":";
-        json += std::to_string(grp.group_id);
-        json += ",\"name\":\"";
-        json += grp.name;
-        json += "\",\"members\":[";
-        for (size_t i = 0; i < grp.member_ids.size(); i++) {
-            if (i > 0) json += ",";
-            json += std::to_string(grp.member_ids[i]);
-        }
-        json += "]}";
-    }
-
-    json += "]}";
-    send_json(request, 200, json);
-}
-
 void AvionMeshWebHandler::handle_events(AsyncWebServerRequest *request) {
     httpd_req_t *req = *request;
+
+    // Evict oldest sessions if at capacity
+    {
+        std::lock_guard<std::mutex> lock(sse_mutex_);
+        while (sse_sessions_.size() >= MAX_SSE_SESSIONS) {
+            auto *old = sse_sessions_.front();
+            int fd = old->fd.load();
+            if (fd != 0)
+                httpd_sess_trigger_close(old->hd, fd);
+            old->fd.store(0);
+            // sse_loop() will clean up the dead entry
+            sse_sessions_.erase(sse_sessions_.begin());
+            delete old;
+        }
+    }
 
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "text/event-stream");
@@ -402,7 +512,15 @@ void AvionMeshWebHandler::handle_add_discovered(AsyncWebServerRequest *request) 
         return;
     }
 
-    hub_->handle_add_discovered(device_id, name, product_type);
+    DeferredAction act;
+    act.type = DeferredAction::AddDiscovered;
+    act.id1 = device_id;
+    act.name = std::move(name);
+    act.product_type = product_type;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
@@ -424,7 +542,13 @@ void AvionMeshWebHandler::handle_unclaim_device(AsyncWebServerRequest *request) 
         return;
     }
 
-    hub_->handle_unclaim_device(avion_id);
+    DeferredAction act;
+    act.type = DeferredAction::UnclaimDevice;
+    act.id1 = avion_id;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
@@ -468,41 +592,22 @@ void AvionMeshWebHandler::handle_control(AsyncWebServerRequest *request) {
         return;
     }
 
-    uint16_t avion_id = 0;
-    int brightness = -1;
-    int color_temp = -1;
+    DeferredAction act;
+    act.type = DeferredAction::Control;
 
     esphome::json::parse_json(body, [&](JsonObject root) -> bool {
-        avion_id = root["avion_id"] | 0u;
+        act.id1 = root["avion_id"] | 0u;
         if (root["brightness"].is<int>())
-            brightness = root["brightness"] | 0;
+            act.brightness = root["brightness"] | 0;
         if (root["color_temp"].is<int>())
-            color_temp = root["color_temp"] | 0;
+            act.color_temp = root["color_temp"] | 0;
         return true;
     });
 
-    if (brightness >= 0) {
-        Command cmd;
-        cmd_brightness(avion_id, static_cast<uint8_t>(brightness), cmd);
-        send_cmd(hub_->mesh_ctx_, cmd);
-
-        auto &state = hub_->device_states_[avion_id];
-        state.brightness = static_cast<uint8_t>(brightness);
-        state.brightness_known = true;
-        hub_->publish_device_state(avion_id);
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
     }
-
-    if (color_temp > 0) {
-        Command cmd;
-        cmd_color_temp(avion_id, static_cast<uint16_t>(color_temp), cmd);
-        send_cmd(hub_->mesh_ctx_, cmd);
-
-        auto &state = hub_->device_states_[avion_id];
-        state.color_temp = static_cast<uint16_t>(color_temp);
-        state.color_temp_known = true;
-        hub_->publish_device_state(avion_id);
-    }
-
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
@@ -520,16 +625,14 @@ void AvionMeshWebHandler::handle_create_group(AsyncWebServerRequest *request) {
         return true;
     });
 
-    uint16_t group_id = hub_->next_group_id();
-    if (group_id == 0) {
-        send_error(request, 503, "no_available_ids");
-        return;
+    DeferredAction act;
+    act.type = DeferredAction::CreateGroup;
+    act.name = std::move(name);
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
     }
-
-    hub_->handle_create_group(group_id, name);
-    char buf[64];
-    snprintf(buf, sizeof(buf), "{\"status\":\"ok\",\"group_id\":%u}", group_id);
-    send_json(request, 200, buf);
+    send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
 void AvionMeshWebHandler::handle_delete_group(AsyncWebServerRequest *request) {
@@ -550,7 +653,13 @@ void AvionMeshWebHandler::handle_delete_group(AsyncWebServerRequest *request) {
         return;
     }
 
-    hub_->handle_delete_group(group_id);
+    DeferredAction act;
+    act.type = DeferredAction::DeleteGroup;
+    act.id1 = group_id;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
@@ -575,7 +684,14 @@ void AvionMeshWebHandler::handle_add_to_group(AsyncWebServerRequest *request) {
         return;
     }
 
-    hub_->handle_add_to_group(avion_id, group_id);
+    DeferredAction act;
+    act.type = DeferredAction::AddToGroup;
+    act.id1 = avion_id;
+    act.id2 = group_id;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
@@ -600,97 +716,36 @@ void AvionMeshWebHandler::handle_remove_from_group(AsyncWebServerRequest *reques
         return;
     }
 
-    hub_->handle_remove_from_group(avion_id, group_id);
+    DeferredAction act;
+    act.type = DeferredAction::RemoveFromGroup;
+    act.id1 = avion_id;
+    act.id2 = group_id;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
 void AvionMeshWebHandler::handle_import(AsyncWebServerRequest *request) {
+    httpd_req_t *req = *request;
+    ESP_LOGI(TAG, "handle_import: content_len=%d", req->content_len);
     std::string body = read_body(request);
+    ESP_LOGI(TAG, "handle_import: body_len=%zu content: '%s'", body.size(), body.c_str());
     if (body.empty()) {
+        ESP_LOGW(TAG, "handle_import: body is empty!");
         send_error(request, 400, "empty_body");
         return;
     }
 
-    int added_devices = 0, added_groups = 0;
-
-    esphome::json::parse_json(body, [&](JsonObject root) -> bool {
-        JsonArray devices = root["devices"];
-        for (JsonObject dev : devices) {
-            uint16_t device_id = dev["device_id"] | 0u;
-            std::string name = dev["name"] | "Unknown";
-            uint8_t product_type = dev["product_type"] | 0u;
-            if (device_id == 0) continue;
-            if (hub_->db_.find_device(device_id)) continue;
-
-            bool has_dim = has_dimming(product_type);
-            bool has_ct = has_color_temp(product_type);
-            hub_->db_.add_device(device_id, product_type, name);
-            hub_->discovery_.publish_light(device_id, name, has_dim, has_ct,
-                                           product_name(product_type));
-            added_devices++;
-        }
-
-        JsonArray groups = root["groups"];
-        for (JsonObject grp : groups) {
-            uint16_t group_id = grp["group_id"] | 0u;
-            std::string name = grp["name"] | "Group";
-            if (group_id == 0) continue;
-            if (!hub_->db_.find_group(group_id)) {
-                hub_->db_.add_group(group_id, name);
-                hub_->discovery_.publish_light(group_id, name, true, true);
-                added_groups++;
-            }
-
-            JsonArray members = grp["members"];
-            for (JsonVariant m : members) {
-                uint16_t member_id = m.as<uint16_t>();
-                if (member_id > 0) {
-                    hub_->db_.add_device_to_group(member_id, group_id);
-                    Command cmd;
-                    cmd_insert_group(member_id, group_id, cmd);
-                    send_cmd(hub_->mesh_ctx_, cmd);
-                }
-            }
-        }
-
-        return true;
-    });
-
-    hub_->publish_all_discovery();
-    hub_->subscribe_all_commands();
-
-    char buf[96];
-    snprintf(buf, sizeof(buf),
-             "{\"status\":\"ok\",\"added_devices\":%d,\"added_groups\":%d}",
-             added_devices, added_groups);
-    send_json(request, 200, buf);
-}
-
-void AvionMeshWebHandler::handle_cloud_import_post(AsyncWebServerRequest *request) {
-    std::string body = read_body(request);
-    if (body.empty()) {
-        send_error(request, 400, "empty_body");
-        return;
+    DeferredAction act;
+    act.type = DeferredAction::Import;
+    act.body = std::move(body);
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
     }
-
-    std::string email, password;
-
-    esphome::json::parse_json(body, [&](JsonObject root) -> bool {
-        email = root["email"] | "";
-        password = root["password"] | "";
-        return true;
-    });
-
-    if (email.empty() || password.empty()) {
-        send_error(request, 400, "missing_credentials");
-        return;
-    }
-
-    // Perform cloud import - this may take several seconds
-    std::string result = hub_->handle_cloud_import(email, password);
-
-    // Send the result
-    send_json(request, 200, result);
+    send_json(request, 200, "{\"status\":\"started\"}");
 }
 
 void AvionMeshWebHandler::handle_set_passphrase(AsyncWebServerRequest *request) {

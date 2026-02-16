@@ -14,10 +14,13 @@ class AvionMeshHub;
 struct SseSession {
     httpd_handle_t hd;
     std::atomic<int> fd{0};
+    bool sync_pending{true};
     static void destroy(void *ptr);
 };
 
 class AvionMeshWebHandler : public AsyncWebHandler {
+    static constexpr size_t MAX_SSE_SESSIONS = 2;
+
  public:
     AvionMeshWebHandler(AvionMeshHub *hub) : hub_(hub) {}
 
@@ -26,6 +29,7 @@ class AvionMeshWebHandler : public AsyncWebHandler {
 
     void send_event(const char *event, const std::string &data);
     void sse_loop();
+    void reset_sync();
 
  protected:
     AvionMeshHub *hub_;
@@ -35,8 +39,10 @@ class AvionMeshWebHandler : public AsyncWebHandler {
 
     std::string read_body(AsyncWebServerRequest *request);
 
+    void send_event_to(SseSession *session, const char *event, const std::string &data);
+    void send_initial_sync(SseSession *session);
+
     void handle_index(AsyncWebServerRequest *request);
-    void handle_status(AsyncWebServerRequest *request);
     void handle_events(AsyncWebServerRequest *request);
     void handle_discover_mesh_post(AsyncWebServerRequest *request);
     void handle_scan_unassociated_post(AsyncWebServerRequest *request);
@@ -50,7 +56,6 @@ class AvionMeshWebHandler : public AsyncWebHandler {
     void handle_add_to_group(AsyncWebServerRequest *request);
     void handle_remove_from_group(AsyncWebServerRequest *request);
     void handle_import(AsyncWebServerRequest *request);
-    void handle_cloud_import_post(AsyncWebServerRequest *request);
     void handle_set_passphrase(AsyncWebServerRequest *request);
     void handle_generate_passphrase(AsyncWebServerRequest *request);
     void handle_factory_reset(AsyncWebServerRequest *request);

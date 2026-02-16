@@ -53,11 +53,6 @@ td{padding:4px 6px;border-bottom:1px solid #333}
 <section>
 <h2>Setup</h2>
 <div class="row">
-  <input id="cloudEmail" placeholder="Avi-on email" style="width:160px">
-  <input id="cloudPass" type="password" placeholder="Password" style="width:120px">
-  <button onclick="cloudImport()">Import from Cloud</button>
-</div>
-<div class="row" style="margin-top:8px">
   <input id="newPassphrase" type="password" placeholder="Base64 passphrase (≥16 decoded)" style="width:240px">
   <button onclick="setPassphrase()">Set Passphrase</button>
   <button onclick="generatePassphrase()">Generate New</button>
@@ -134,7 +129,9 @@ async function api(path,opts){
     if(msg==='ble_not_ready')throw new Error('BLE not ready - check connection status');
     throw new Error(msg);
   }
-  return r.json();
+  const text=await r.text();
+  feedLog('API response: '+text.substring(0,200));
+  return JSON.parse(text);
 }
 async function postJson(path,data){return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})}
 
@@ -165,18 +162,105 @@ function feedLog(text){
 /* ---- SSE ---- */
 let evtSource = null;
 
+function updateStatusBar(){
+  const bs=$('bleState');
+  bs.textContent=BLE_NAMES[bleState]||'?';
+  bs.className='v '+(bleState===4?'ble-ok':'ble-bad');
+  $('devCount').textContent=devices.length;
+  $('grpCount').textContent=groups.length;
+}
+
 function connectSSE(){
   if(evtSource) evtSource.close();
   evtSource = new EventSource(API+'events');
 
   evtSource.onopen = ()=>{
     $('sseDot').className='sse-dot sse-on';
+    devices=[];
+    groups=[];
     feedLog('SSE connected');
   };
 
   evtSource.onerror = ()=>{
     $('sseDot').className='sse-dot sse-off';
   };
+
+  evtSource.addEventListener('meta', e=>{
+    const d=JSON.parse(e.data);
+    bleState=d.ble_state;
+    $('rxCount').textContent=d.rx_count;
+    updateStatusBar();
+  });
+
+  evtSource.addEventListener('devices', e=>{
+    const d=JSON.parse(e.data);
+    (d.devices||[]).forEach(dev=>{
+      const idx=devices.findIndex(x=>x.avion_id===dev.avion_id);
+      if(idx>=0) devices[idx]=dev; else devices.push(dev);
+    });
+    updateStatusBar();
+    renderDevices();
+  });
+
+  evtSource.addEventListener('groups', e=>{
+    const d=JSON.parse(e.data);
+    (d.groups||[]).forEach(grp=>{
+      const idx=groups.findIndex(x=>x.group_id===grp.group_id);
+      if(idx>=0) groups[idx]=grp; else groups.push(grp);
+    });
+    updateStatusBar();
+    renderGroups();
+  });
+
+  evtSource.addEventListener('sync_complete', e=>{
+    feedLog('Initial sync complete: '+devices.length+' devices, '+groups.length+' groups');
+    updateStatusBar();
+    renderDevices();
+    renderGroups();
+  });
+
+  evtSource.addEventListener('device_added', e=>{
+    const d=JSON.parse(e.data);
+    const idx=devices.findIndex(x=>x.avion_id===d.avion_id);
+    if(idx>=0) devices[idx]=d; else devices.push(d);
+    updateStatusBar();
+    renderDevices();
+    feedLog('Device added: '+d.name+' (#'+d.avion_id+')');
+  });
+
+  evtSource.addEventListener('device_removed', e=>{
+    const d=JSON.parse(e.data);
+    devices=devices.filter(x=>x.avion_id!==d.avion_id);
+    updateStatusBar();
+    renderDevices();
+    renderGroups();
+    feedLog('Device removed: #'+d.avion_id);
+  });
+
+  evtSource.addEventListener('group_added', e=>{
+    const d=JSON.parse(e.data);
+    const idx=groups.findIndex(x=>x.group_id===d.group_id);
+    if(idx>=0) groups[idx]=d; else groups.push(d);
+    updateStatusBar();
+    renderGroups();
+    feedLog('Group added: '+d.name+' (#'+d.group_id+')');
+  });
+
+  evtSource.addEventListener('group_removed', e=>{
+    const d=JSON.parse(e.data);
+    groups=groups.filter(x=>x.group_id!==d.group_id);
+    updateStatusBar();
+    renderGroups();
+    feedLog('Group removed: #'+d.group_id);
+  });
+
+  evtSource.addEventListener('group_updated', e=>{
+    const d=JSON.parse(e.data);
+    const idx=groups.findIndex(x=>x.group_id===d.group_id);
+    if(idx>=0) groups[idx]=d; else groups.push(d);
+    renderGroups();
+    feedLog('Group updated: '+d.name+' (#'+d.group_id+')');
+  });
 
   evtSource.addEventListener('discover_mesh', e=>{
     const d=JSON.parse(e.data);
@@ -206,7 +290,6 @@ function connectSSE(){
       }
       claimingHash = null;
     }
-    setTimeout(refreshStatus,1000);
   });
 
   evtSource.addEventListener('examine', e=>{
@@ -225,13 +308,16 @@ function connectSSE(){
   });
 
   evtSource.addEventListener('debug', e=>{
-    const d=JSON.parse(e.data);
     feedLog('DEBUG: '+e.data);
+  });
+
+  evtSource.addEventListener('import_result', e=>{
+    const d=JSON.parse(e.data);
+    showMsg($('setupMsg'),`Import complete: ${d.added_devices} devices, ${d.added_groups} groups added`,true);
   });
 
   evtSource.addEventListener('state', e=>{
     const d=JSON.parse(e.data);
-    // Update local state
     const dev=devices.find(x=>x.avion_id===d.avion_id);
     if(dev){
       dev.brightness=d.brightness;
@@ -243,27 +329,6 @@ function connectSSE(){
     if(d.color_temp!==undefined) info+=' ct='+d.color_temp+'K';
     feedLog(info);
   });
-}
-
-/* ---- Status (initial load + periodic refresh for device/group list) ---- */
-async function refreshStatus(){
-  try{
-    const d=await api('status');
-    bleState=d.ble_state;
-    devices=d.devices||[];
-    groups=d.groups||[];
-    const bs=$('bleState');
-    bs.textContent=BLE_NAMES[d.ble_state]||'?';
-    bs.className='v '+(d.ble_state===4?'ble-ok':'ble-bad');
-    $('devCount').textContent=devices.length;
-    $('grpCount').textContent=groups.length;
-    $('rxCount').textContent=d.rx_count;
-    renderDevices();
-    renderGroups();
-  }catch(e){
-    $('bleState').textContent='Error';
-    $('bleState').className='v ble-bad';
-  }
 }
 
 function renderDevices(){
@@ -360,7 +425,6 @@ async function examDev(id){
 async function removeDev(id){
   if(!confirm(`Remove device ${id}?`)) return;
   await postJson('unclaim_device',{avion_id:id});
-  setTimeout(refreshStatus,500);
 }
 
 async function createGroup(){
@@ -368,13 +432,11 @@ async function createGroup(){
   if(!name) return;
   await postJson('create_group',{name});
   $('newGrpName').value='';
-  setTimeout(refreshStatus,500);
 }
 
 async function delGroup(id){
   if(!confirm(`Delete group ${id}?`)) return;
   await postJson('delete_group',{group_id:id});
-  setTimeout(refreshStatus,500);
 }
 
 async function addToGrp(gid){
@@ -382,12 +444,10 @@ async function addToGrp(gid){
   const mid=+sel.value;
   if(!mid) return;
   await postJson('add_to_group',{avion_id:mid,group_id:gid});
-  setTimeout(refreshStatus,500);
 }
 
 async function rmFromGrp(mid,gid){
   await postJson('remove_from_group',{avion_id:mid,group_id:gid});
-  setTimeout(refreshStatus,500);
 }
 
 /* Mesh scan */
@@ -431,7 +491,6 @@ async function addScanned(did){
   const pt=sel?+sel.value:134;
   await postJson('add_discovered',{device_id:did,name,product_type:pt});
   showMsg($('scanMsg'),'Device added','ok');
-  setTimeout(refreshStatus,500);
 }
 
 /* Unassociated scan */
@@ -481,44 +540,6 @@ async function claimDev(hash,idx){
 }
 
 /* Setup functions */
-async function cloudImport(){
-  const email=$('cloudEmail').value, pass=$('cloudPass').value;
-  const msgEl=$('setupMsg');
-  if(!email||!pass){showMsg(msgEl,'Enter email and password',false);return}
-
-  try{
-    showMsg(msgEl,'Contacting Avi-on cloud (via ESP)...',true);
-
-    // Call ESP32 to handle the import
-    const result=await postJson('cloud_import',{email,password:pass});
-
-    if(result.status!=='ok'){
-      throw new Error(result.message||'Cloud import failed');
-    }
-
-    // Process the devices and groups
-    const cloudDevs=(result.devices||[]).map(d=>({
-      device_id:d.avion_id||d.device_id||d.id,
-      name:d.name||'Device',
-      product_type:d.product_id||d.product_type||134
-    })).filter(d=>d.device_id>0);
-
-    const cloudGrps=(result.groups||[]).map(g=>({
-      group_id:g.avion_id||g.id,
-      name:g.name||'Group',
-      members:(g.abstract_devices||g.devices||[]).map(d=>d.avion_id||d.device_id||d.id).filter(Boolean)
-    })).filter(g=>g.group_id>0);
-
-    showMsg(msgEl,`Importing ${cloudDevs.length} devices, ${cloudGrps.length} groups...`,true);
-
-    const importResult=await postJson('import',{devices:cloudDevs,groups:cloudGrps});
-    showMsg(msgEl,`Import complete: ${importResult.added_devices} devices, ${importResult.added_groups} groups added`,true);
-    setTimeout(refreshStatus,500);
-  }catch(e){
-    showMsg(msgEl,'Cloud import failed: '+e.message,false);
-  }
-}
-
 async function setPassphrase(){
   const passphrase=$('newPassphrase').value;
   const msgEl=$('setupMsg');
@@ -567,9 +588,6 @@ async function factoryReset(){
   setTimeout(()=>location.reload(),2000);
 }
 
-// Initial load + periodic refresh for device/group list changes
-refreshStatus();
-setInterval(refreshStatus,30000);
 connectSSE();
 </script>
 </body>

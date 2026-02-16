@@ -7,7 +7,6 @@
 #include "esphome/components/json/json_util.h"  // management commands still use JSON
 #include "esphome/components/web_server_base/web_server_base.h"
 
-#include <esp_http_client.h>
 #include <cstring>
 #include <ctime>
 
@@ -401,6 +400,16 @@ void AvionMeshHub::update_mesh_initialized() {
         ESP_LOGI(TAG, "Mesh is no longer operational (crypto=%d, ble=%d)",
                  crypto_initialized_, static_cast<int>(ble_state_));
     }
+
+    if (mesh_initialized_ != was_initialized && web_handler_) {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"ble_state\":%u,\"mesh_initialized\":%s,\"rx_count\":%u}",
+                 static_cast<uint8_t>(ble_state_),
+                 mesh_initialized_ ? "true" : "false",
+                 rx_count_);
+        web_handler_->send_event("meta", buf);
+    }
 }
 
 /* ---- Main loop ---- */
@@ -436,6 +445,8 @@ void AvionMeshHub::loop() {
         pending_claim_auto_ = false;
         handle_claim_device_auto();
     }
+
+    process_deferred_actions();
 
     /* Defer GATTC registration until esp32_ble has fully initialized BLE */
     if (!gattc_registered_ && esphome::esp32_ble::global_ble->is_active()) {
@@ -508,6 +519,218 @@ void AvionMeshHub::loop() {
             associating_ = false;
             csrmesh::associate_cancel(mesh_ctx_);
             send_response("{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"timeout\"}");
+        }
+    }
+}
+
+/* ---- Deferred action processing ---- */
+
+void AvionMeshHub::process_deferred_actions() {
+    std::vector<DeferredAction> actions;
+    {
+        std::lock_guard<std::mutex> lock(action_mutex_);
+        if (pending_actions_.empty())
+            return;
+        actions.swap(pending_actions_);
+    }
+
+    for (auto &act : actions) {
+        switch (act.type) {
+        case DeferredAction::Control:
+            if (act.brightness >= 0) {
+                Command cmd;
+                cmd_brightness(act.id1, static_cast<uint8_t>(act.brightness), cmd);
+                send_cmd(mesh_ctx_, cmd);
+                auto &state = device_states_[act.id1];
+                state.brightness = static_cast<uint8_t>(act.brightness);
+                state.brightness_known = true;
+                publish_device_state(act.id1);
+            }
+            if (act.color_temp > 0) {
+                Command cmd;
+                cmd_color_temp(act.id1, static_cast<uint16_t>(act.color_temp), cmd);
+                send_cmd(mesh_ctx_, cmd);
+                auto &state = device_states_[act.id1];
+                state.color_temp = static_cast<uint16_t>(act.color_temp);
+                state.color_temp_known = true;
+                publish_device_state(act.id1);
+            }
+            break;
+
+        case DeferredAction::AddDiscovered:
+            handle_add_discovered(act.id1, act.name, act.product_type);
+            if (web_handler_) {
+                auto *dev = db_.find_device(act.id1);
+                if (dev) {
+                    std::string json = "{\"avion_id\":";
+                    json += std::to_string(dev->avion_id);
+                    json += ",\"name\":\"";
+                    json += dev->name;
+                    json += "\",\"product_type\":";
+                    json += std::to_string(dev->product_type);
+                    json += ",\"product_name\":\"";
+                    json += product_name(dev->product_type);
+                    json += "\",\"groups\":[]}";
+                    web_handler_->send_event("device_added", json);
+                }
+            }
+            break;
+
+        case DeferredAction::UnclaimDevice:
+            handle_unclaim_device(act.id1);
+            if (web_handler_) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "{\"avion_id\":%u}", act.id1);
+                web_handler_->send_event("device_removed", buf);
+            }
+            break;
+
+        case DeferredAction::CreateGroup: {
+            uint16_t group_id = next_group_id();
+            if (group_id != 0) {
+                handle_create_group(group_id, act.name);
+                if (web_handler_) {
+                    std::string json = "{\"group_id\":";
+                    json += std::to_string(group_id);
+                    json += ",\"name\":\"";
+                    json += act.name;
+                    json += "\",\"members\":[]}";
+                    web_handler_->send_event("group_added", json);
+                }
+            }
+            break;
+        }
+
+        case DeferredAction::DeleteGroup:
+            handle_delete_group(act.id1);
+            if (web_handler_) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "{\"group_id\":%u}", act.id1);
+                web_handler_->send_event("group_removed", buf);
+            }
+            break;
+
+        case DeferredAction::AddToGroup:
+            handle_add_to_group(act.id1, act.id2);
+            if (web_handler_) {
+                auto *grp = db_.find_group(act.id2);
+                if (grp) {
+                    std::string json = "{\"group_id\":";
+                    json += std::to_string(grp->group_id);
+                    json += ",\"name\":\"";
+                    json += grp->name;
+                    json += "\",\"members\":[";
+                    for (size_t i = 0; i < grp->member_ids.size(); i++) {
+                        if (i > 0) json += ",";
+                        json += std::to_string(grp->member_ids[i]);
+                    }
+                    json += "]}";
+                    web_handler_->send_event("group_updated", json);
+                }
+            }
+            break;
+
+        case DeferredAction::RemoveFromGroup:
+            handle_remove_from_group(act.id1, act.id2);
+            if (web_handler_) {
+                auto *grp = db_.find_group(act.id2);
+                if (grp) {
+                    std::string json = "{\"group_id\":";
+                    json += std::to_string(grp->group_id);
+                    json += ",\"name\":\"";
+                    json += grp->name;
+                    json += "\",\"members\":[";
+                    for (size_t i = 0; i < grp->member_ids.size(); i++) {
+                        if (i > 0) json += ",";
+                        json += std::to_string(grp->member_ids[i]);
+                    }
+                    json += "]}";
+                    web_handler_->send_event("group_updated", json);
+                }
+            }
+            break;
+
+        case DeferredAction::Import: {
+            int added_devices = 0, added_groups = 0;
+            esphome::json::parse_json(act.body, [&](JsonObject root) -> bool {
+                if (root["reset"] | false) {
+                    ESP_LOGI(TAG, "Import with reset: clearing existing data");
+                    for (auto &dev : db_.devices())
+                        discovery_.remove_light(dev.avion_id);
+                    for (auto &grp : db_.groups())
+                        discovery_.remove_light(grp.group_id);
+                    db_.clear();
+                    db_.load();
+                    device_states_.clear();
+                }
+
+                if (root["passphrase"].is<const char *>()) {
+                    std::string passphrase = root["passphrase"].as<std::string>();
+                    ESP_LOGI(TAG, "Setting passphrase from import (len=%zu)", passphrase.size());
+                    db_.set_passphrase(passphrase);
+                    crypto_initialized_ = false;
+                    mesh_initialized_ = false;
+                    if (!init_crypto()) {
+                        ESP_LOGE(TAG, "Failed to initialize crypto with imported passphrase");
+                        return true;
+                    }
+                    ESP_LOGI(TAG, "Crypto initialized with imported passphrase");
+                }
+
+                JsonArray devices = root["devices"];
+                for (JsonObject dev : devices) {
+                    uint16_t device_id = dev["device_id"] | 0u;
+                    std::string name = dev["name"] | "Unknown";
+                    uint8_t product_type = dev["product_type"] | 0u;
+                    if (device_id == 0) continue;
+                    if (db_.find_device(device_id)) continue;
+
+                    bool has_dim = has_dimming(product_type);
+                    bool has_ct = has_color_temp(product_type);
+                    db_.add_device(device_id, product_type, name);
+                    discovery_.publish_light(device_id, name, has_dim, has_ct,
+                                             product_name(product_type));
+                    added_devices++;
+                }
+
+                JsonArray groups = root["groups"];
+                for (JsonObject grp : groups) {
+                    uint16_t group_id = grp["group_id"] | 0u;
+                    std::string gname = grp["name"] | "Group";
+                    if (group_id == 0) continue;
+                    if (!db_.find_group(group_id)) {
+                        db_.add_group(group_id, gname);
+                        discovery_.publish_light(group_id, gname, true, true);
+                        added_groups++;
+                    }
+
+                    JsonArray members = grp["members"];
+                    for (JsonVariant m : members) {
+                        uint16_t member_id = m.as<uint16_t>();
+                        if (member_id > 0) {
+                            db_.add_device_to_group(member_id, group_id);
+                            Command cmd;
+                            cmd_insert_group(member_id, group_id, cmd);
+                            send_cmd(mesh_ctx_, cmd);
+                        }
+                    }
+                }
+                return true;
+            });
+
+            publish_all_discovery();
+            subscribe_all_commands();
+
+            if (web_handler_) {
+                char buf[96];
+                snprintf(buf, sizeof(buf),
+                         "{\"added_devices\":%d,\"added_groups\":%d}",
+                         added_devices, added_groups);
+                web_handler_->send_event("import_result", buf);
+                web_handler_->reset_sync();
+            }
+            break;
+        }
         }
     }
 }
@@ -1320,231 +1543,6 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
         }
         web_handler_->send_event("state", std::string(buf, len));
     }
-}
-
-/* ---- Cloud import from Avi-on API ---- */
-
-// CA certificate for api.avi-on.com
-static const char AVION_API_CERT_PEM[] =
-    "-----BEGIN CERTIFICATE-----\n"
-    "MIIFxDCCBKygAwIBAgIQC3fm34n/AVrlPO/+d4jW3jANBgkqhkiG9w0BAQsFADA8\n"
-    "MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRwwGgYDVQQDExNBbWF6b24g\n"
-    "UlNBIDIwNDggTTAyMB4XDTI1MDQwMTAwMDAwMFoXDTI2MDQzMDIzNTk1OVowFzEV\n"
-    "MBMGA1UEAwwMKi5hdmktb24uY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB\n"
-    "CgKCAQEAr11CJotkh3w+G8Hv7jBkc4K3OoYHqLScWMaP++8HJ/V8yruAxWQaH8Ma\n"
-    "4k++tMIYafoO1vLu1KzvaoKknthMxum1LLlgFUBhqjOqk+4uyksZPEWwcEuZdD7A\n"
-    "3HPqWm09d7BFmNspFBQwMQFURVaggKUhUKHgdhu45Uj4etk9enlo4kMQZKyaG6ac\n"
-    "PU/RyAArqIJBgGUMHgiDFdenPqDMTO+PXUixOMbmKNmE7QcLn/mzFGpylMrPY24P\n"
-    "39hJQYwDLAphqayikLq7yCgVtsUIa1twE7aR5u8yaGYAnhRD0p8Rjj4k2Oaj4imP\n"
-    "b7BAsq8vFGqrzRDd9IB6kFfvdZRCywIDAQABo4IC5TCCAuEwHwYDVR0jBBgwFoAU\n"
-    "wDFSzVpQw4J8dHHOy+mc+XrrguIwHQYDVR0OBBYEFKHj1QZO9R5ZZdWYh+rFBGCb\n"
-    "ji+YMBcGA1UdEQQQMA6CDCouYXZpLW9uLmNvbTATBgNVHSAEDDAKMAgGBmeBDAEC\n"
-    "ATAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMC\n"
-    "MDsGA1UdHwQ0MDIwMKAuoCyGKmh0dHA6Ly9jcmwucjJtMDIuYW1hem9udHJ1c3Qu\n"
-    "Y29tL3IybTAyLmNybDB1BggrBgEFBQcBAQRpMGcwLQYIKwYBBQUHMAGGIWh0dHA6\n"
-    "Ly9vY3NwLnIybTAyLmFtYXpvbnRydXN0LmNvbTA2BggrBgEFBQcwAoYqaHR0cDov\n"
-    "L2NydC5yMm0wMi5hbWF6b250cnVzdC5jb20vcjJtMDIuY2VyMAwGA1UdEwEB/wQC\n"
-    "MAAwggF+BgorBgEEAdZ5AgQCBIIBbgSCAWoBaAB1AJaXZL9VWJet90OHaDcIQnfp\n"
-    "8DrV9qTzNm5GpD8PyqnGAAABle8Eof4AAAQDAEYwRAIgb/+kWXETOluaknoMM+5/\n"
-    "/w6c9Ty01ImtqTzHT72Dl94CICmzydADNqgYFoLYalo66Rh7hzpFPLnrk6A6kjyl\n"
-    "u29kAHcAZBHEbKQS7KeJHKICLgC8q08oB9QeNSer6v7VA8l9zfAAAAGV7wSh7wAA\n"
-    "BAMASDBGAiEA+R7Qa1W3LS00Er0dSKeibYuqQecAwetL26gsCM06o+MCIQD14o7J\n"
-    "eooLr+gW0Tk7UNfE2ARantoBzSmpVE1XXdkc/wB2AMs49xWJfIShRF9bwd37yW7y\n"
-    "mlnNRwppBYWwyxTDFFjnAAABle8Eoe4AAAQDAEcwRQIhANrifS91gFzSQvswzzhs\n"
-    "2DdXvQFmRXgTE0w4HxyxqN7KAiBj637IYgeuM5ddPwJTkoydLbUC1K/Mxo6zMrWR\n"
-    "VgaYdzANBgkqhkiG9w0BAQsFAAOCAQEAB2k64DFAHuU5E1Ad5r7B3YAye24p5po7\n"
-    "V3LfnLtUIChtoWxwiu2tUhKeTa4/V2iYXTStYd4ZlwBwO+Hf+tjQsha95R202/JR\n"
-    "DCP+87Fake6isemhmFwwXgGahn2egaXHzsnzOUHH5sy/WGXjYPZiTmQC2WUKyrV7\n"
-    "HoldYf74g9b5zsXZVElwy0Wk9QO5wBxLbI79P8vhQez100d07v5iBn762M+kmI49\n"
-    "0Ef/MelmtiUVqejdk32Z9vKw6Q73oafy3BJdNXgIzpyG1Pcq+9RfvBvzvJjUmJ3a\n"
-    "NBb4JyY/q659T7HpCPpdW8Dhtia8ARMjcSS/t7f38tTOFy4g7cLFjw==\n"
-    "-----END CERTIFICATE-----\n";
-
-static const char *HTTP_TAG = "avionmesh.http";
-
-// HTTP response buffer for API calls
-static struct HttpResponse {
-    std::string body;
-    int status_code;
-    bool done;
-
-    HttpResponse() : status_code(0), done(false) {}
-
-    void clear() {
-        body.clear();
-        status_code = 0;
-        done = false;
-    }
-} cloud_http_response;
-
-// HTTP event handler for esp_http_client
-static esp_err_t cloud_http_event_handler(esp_http_client_event_t *evt) {
-    switch (evt->event_id) {
-        case HTTP_EVENT_ON_DATA:
-            cloud_http_response.body.append(static_cast<const char *>(evt->data), evt->data_len);
-            break;
-        case HTTP_EVENT_ON_FINISH:
-            cloud_http_response.status_code = esp_http_client_get_status_code(evt->client);
-            cloud_http_response.done = true;
-            break;
-        case HTTP_EVENT_DISCONNECTED:
-            cloud_http_response.done = true;
-            break;
-        default:
-            break;
-    }
-    return ESP_OK;
-}
-
-static bool cloud_https_post(const std::string &url, const std::string &json_body,
-                               const std::string &auth_token) {
-    cloud_http_response.clear();
-
-    esp_http_client_config_t config = {};
-    config.url = url.c_str();
-    config.method = HTTP_METHOD_POST;
-    config.event_handler = cloud_http_event_handler;
-    config.user_data = &cloud_http_response;
-    config.timeout_ms = 15000;
-    config.buffer_size = 4096;
-    config.buffer_size_tx = 4096;
-    config.cert_pem = AVION_API_CERT_PEM;
-
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGE(HTTP_TAG, "Failed to init HTTP client");
-        return false;
-    }
-
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, "User-Agent", "ESP32");
-    if (!auth_token.empty()) {
-        std::string auth_header = "Bearer " + auth_token;
-        esp_http_client_set_header(client, "Authorization", auth_header.c_str());
-    }
-    esp_http_client_set_post_field(client, json_body.c_str(), json_body.length());
-
-    esp_err_t err = esp_http_client_perform(client);
-    esp_http_client_cleanup(client);
-
-    return (err == ESP_OK);
-}
-
-static bool cloud_https_get(const std::string &url, const std::string &auth_token) {
-    cloud_http_response.clear();
-
-    esp_http_client_config_t config = {};
-    config.url = url.c_str();
-    config.method = HTTP_METHOD_GET;
-    config.event_handler = cloud_http_event_handler;
-    config.user_data = &cloud_http_response;
-    config.timeout_ms = 15000;
-    config.buffer_size = 4096;
-    config.cert_pem = AVION_API_CERT_PEM;
-
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGE(HTTP_TAG, "Failed to init HTTP client");
-        return false;
-    }
-
-    esp_http_client_set_header(client, "User-Agent", "ESP32");
-    if (!auth_token.empty()) {
-        std::string auth_header = "Bearer " + auth_token;
-        esp_http_client_set_header(client, "Authorization", auth_header.c_str());
-    }
-
-    esp_err_t err = esp_http_client_perform(client);
-    esp_http_client_cleanup(client);
-
-    return (err == ESP_OK);
-}
-
-std::string AvionMeshHub::handle_cloud_import(const std::string &email, const std::string &password) {
-    ESP_LOGI(TAG, "Starting cloud import for %s", email.c_str());
-
-    // Step 1: Login
-    std::string login_body = "{\"email\":\"" + email + "\",\"password\":\"" + password + "\"}";
-
-    if (!cloud_https_post("https://api.avi-on.com/sessions", login_body, "")) {
-        ESP_LOGE(HTTP_TAG, "Login request failed");
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"login_failed\"}";
-    }
-
-    if (cloud_http_response.status_code != 200 && cloud_http_response.status_code != 201) {
-        ESP_LOGE(HTTP_TAG, "Login failed with status %d: %s", cloud_http_response.status_code, cloud_http_response.body.c_str());
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"login_failed\"}";
-    }
-
-    // Extract auth token from JSON response
-    std::string token;
-    esphome::json::parse_json(cloud_http_response.body, [&](JsonObject root) -> bool {
-        if (root.containsKey("credentials") && root["credentials"].is<JsonObject>()) {
-            JsonObject creds = root["credentials"];
-            if (creds.containsKey("auth_token")) {
-                token = creds["auth_token"].as<std::string>();
-            }
-        }
-        return true;
-    });
-
-    if (token.empty()) {
-        ESP_LOGE(HTTP_TAG, "No auth token in login response");
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"no_token\"}";
-    }
-
-    ESP_LOGI(TAG, "Login successful, fetching locations");
-
-    // Step 2: Get locations
-    if (!cloud_https_get("https://api.avi-on.com/user/locations", token) ||
-        cloud_http_response.status_code != 200) {
-        ESP_LOGE(HTTP_TAG, "Failed to fetch locations");
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"locations_failed\"}";
-    }
-
-    std::string location_pid;
-    esphome::json::parse_json(cloud_http_response.body, [&](JsonObject root) -> bool {
-        if (root.containsKey("locations") && root["locations"].is<JsonArray>()) {
-            JsonArray locs = root["locations"];
-            if (locs.size() > 0) {
-                JsonObject loc = locs[0];
-                location_pid = loc["pid"] | loc["id"] | "";
-            }
-        }
-        return true;
-    });
-
-    if (location_pid.empty()) {
-        ESP_LOGE(HTTP_TAG, "No locations found");
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"no_locations\"}";
-    }
-
-    ESP_LOGI(TAG, "Using location: %s", location_pid.c_str());
-
-    // Step 3: Get devices
-    std::string dev_url = "https://api.avi-on.com/locations/" + location_pid + "/abstract_devices";
-    if (!cloud_https_get(dev_url, token) || cloud_http_response.status_code != 200) {
-        ESP_LOGE(HTTP_TAG, "Failed to fetch devices");
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"devices_failed\"}";
-    }
-
-    std::string devices_json = cloud_http_response.body;
-
-    // Step 4: Get groups
-    std::string grp_url = "https://api.avi-on.com/locations/" + location_pid + "/groups";
-    if (!cloud_https_get(grp_url, token) || cloud_http_response.status_code != 200) {
-        ESP_LOGE(HTTP_TAG, "Failed to fetch groups");
-        return "{\"action\":\"cloud_import\",\"status\":\"error\",\"message\":\"groups_failed\"}";
-    }
-
-    std::string groups_json = cloud_http_response.body;
-
-    // Parse and return the combined response
-    std::string result = "{\"action\":\"cloud_import\",\"status\":\"ok\",";
-    result += "\"devices\":" + devices_json + ",\"groups\":" + groups_json + "}";
-
-    ESP_LOGI(TAG, "Cloud import complete");
-    return result;
 }
 
 }  // namespace avionmesh

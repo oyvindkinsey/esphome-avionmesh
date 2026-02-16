@@ -11,9 +11,31 @@
 #include <avionmesh/avionmesh.h>
 
 #include <map>
+#include <mutex>
 #include <vector>
 
 namespace avionmesh {
+
+struct DeferredAction {
+    enum Type : uint8_t {
+        Control,
+        AddDiscovered,
+        UnclaimDevice,
+        CreateGroup,
+        DeleteGroup,
+        AddToGroup,
+        RemoveFromGroup,
+        Import,
+    };
+    Type type;
+    uint16_t id1{0};
+    uint16_t id2{0};
+    uint8_t product_type{0};
+    int brightness{-1};
+    int color_temp{-1};
+    std::string name;
+    std::string body;  // for Import
+};
 
 class AvionMeshWebHandler;
 
@@ -126,6 +148,11 @@ class AvionMeshHub : public esphome::Component,
     std::string pending_claim_name_;
     uint8_t pending_claim_product_type_{0};
 
+    /* Thread-safe action queue (httpd thread → main loop) */
+    std::mutex action_mutex_;
+    std::vector<DeferredAction> pending_actions_;
+    void process_deferred_actions();
+
     /* Unassociated scan state */
     bool scanning_unassociated_{false};
     std::vector<uint32_t> scan_uuid_hashes_;
@@ -177,8 +204,6 @@ class AvionMeshHub : public esphome::Component,
     void handle_set_passphrase(const std::string &passphrase);
     void handle_generate_passphrase();
     void handle_factory_reset();
-    std::string handle_cloud_import(const std::string &email, const std::string &password);
-
     void on_switch_command(uint16_t avion_id, const std::string &payload);
     void on_brightness_command(uint16_t avion_id, const std::string &payload);
     void on_color_temp_command(uint16_t avion_id, const std::string &payload);
