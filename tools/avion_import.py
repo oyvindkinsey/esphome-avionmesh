@@ -117,10 +117,16 @@ def fetch_groups(token, location_pid, pid_to_avid):
     return groups
 
 
-def send_import(device_ip, payload):
-    url = f"http://{device_ip}/avionmesh/api/import"
+def send_import(device_ip, payload, username=None, password_http=None):
+    url = f"http://{device_ip}/api/import"
     data = json.dumps(payload).encode()
-    req = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    if username and password_http:
+        import base64
+        cred = base64.b64encode(f"{username}:{password_http}".encode()).decode()
+        headers["Authorization"] = f"Basic {cred}"
+    req = Request(url, data=data, headers=headers, method="POST")
+
     print(f"\nImporting to {device_ip}...")
     print(f"  Payload: {len(data)} bytes, {len(payload.get('devices', []))} devices, "
           f"{len(payload.get('groups', []))} groups")
@@ -145,6 +151,8 @@ def main():
     parser.add_argument("--device", required=True, help="ESPHome device IP address")
     parser.add_argument("--dry-run", action="store_true", help="Fetch from cloud but don't send to device")
     parser.add_argument("--no-reset", action="store_true", help="Don't clear existing data before import")
+    parser.add_argument("--username", help="HTTP Basic Auth username for the ESPHome device")
+    parser.add_argument("--password-http", help="HTTP Basic Auth password for the ESPHome device")
     args = parser.parse_args()
 
     token = login(args.email, args.password)
@@ -162,7 +170,7 @@ def main():
         print("\n--- Dry run (would send): ---")
         print(json.dumps(payload, indent=2))
     else:
-        send_import(args.device, payload)
+        send_import(args.device, payload, args.username, args.password_http)
         print("Done!")
 
 

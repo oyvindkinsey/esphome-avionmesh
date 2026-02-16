@@ -261,7 +261,7 @@ void AvionMeshWebHandler::sse_loop() {
 
 bool AvionMeshWebHandler::canHandle(AsyncWebServerRequest *request) const {
     std::string url = request->url();
-    return url == "/avionmesh" || url.rfind("/avionmesh/", 0) == 0;
+    return url == "/ui" || url.rfind("/api/", 0) == 0;
 }
 
 void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
@@ -270,39 +270,39 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
 
     ESP_LOGD(TAG, "Request: %s %s", method == HTTP_POST ? "POST" : "GET", url.c_str());
 
-    if (url == "/avionmesh") {
+    if (url == "/ui") {
         handle_index(request);
-    } else if (url == "/avionmesh/api/events" && method == HTTP_GET) {
+    } else if (url == "/api/events" && method == HTTP_GET) {
         handle_events(request);
-    } else if (url == "/avionmesh/api/discover_mesh" && method == HTTP_POST) {
+    } else if (url == "/api/discover_mesh" && method == HTTP_POST) {
         handle_discover_mesh_post(request);
-    } else if (url == "/avionmesh/api/scan_unassociated" && method == HTTP_POST) {
+    } else if (url == "/api/scan_unassociated" && method == HTTP_POST) {
         handle_scan_unassociated_post(request);
-    } else if (url == "/avionmesh/api/claim_device" && method == HTTP_POST) {
+    } else if (url == "/api/claim_device" && method == HTTP_POST) {
         handle_claim_device(request);
-    } else if (url == "/avionmesh/api/add_discovered" && method == HTTP_POST) {
+    } else if (url == "/api/add_discovered" && method == HTTP_POST) {
         handle_add_discovered(request);
-    } else if (url == "/avionmesh/api/unclaim_device" && method == HTTP_POST) {
+    } else if (url == "/api/unclaim_device" && method == HTTP_POST) {
         handle_unclaim_device(request);
-    } else if (url == "/avionmesh/api/examine_device" && method == HTTP_POST) {
+    } else if (url == "/api/examine_device" && method == HTTP_POST) {
         handle_examine_device_post(request);
-    } else if (url == "/avionmesh/api/control" && method == HTTP_POST) {
+    } else if (url == "/api/control" && method == HTTP_POST) {
         handle_control(request);
-    } else if (url == "/avionmesh/api/create_group" && method == HTTP_POST) {
+    } else if (url == "/api/create_group" && method == HTTP_POST) {
         handle_create_group(request);
-    } else if (url == "/avionmesh/api/delete_group" && method == HTTP_POST) {
+    } else if (url == "/api/delete_group" && method == HTTP_POST) {
         handle_delete_group(request);
-    } else if (url == "/avionmesh/api/add_to_group" && method == HTTP_POST) {
+    } else if (url == "/api/add_to_group" && method == HTTP_POST) {
         handle_add_to_group(request);
-    } else if (url == "/avionmesh/api/remove_from_group" && method == HTTP_POST) {
+    } else if (url == "/api/remove_from_group" && method == HTTP_POST) {
         handle_remove_from_group(request);
-    } else if (url == "/avionmesh/api/import" && method == HTTP_POST) {
+    } else if (url == "/api/import" && method == HTTP_POST) {
         handle_import(request);
-    } else if (url == "/avionmesh/api/set_passphrase" && method == HTTP_POST) {
+    } else if (url == "/api/set_passphrase" && method == HTTP_POST) {
         handle_set_passphrase(request);
-    } else if (url == "/avionmesh/api/generate_passphrase" && method == HTTP_POST) {
+    } else if (url == "/api/generate_passphrase" && method == HTTP_POST) {
         handle_generate_passphrase(request);
-    } else if (url == "/avionmesh/api/factory_reset" && method == HTTP_POST) {
+    } else if (url == "/api/factory_reset" && method == HTTP_POST) {
         handle_factory_reset(request);
     } else {
         send_error(request, 404, "not_found");

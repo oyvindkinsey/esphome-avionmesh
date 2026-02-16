@@ -421,7 +421,7 @@ void AvionMeshHub::loop() {
             web_handler_ = new AvionMeshWebHandler(this);
             web_base->add_handler(web_handler_);
             web_registered_ = true;
-            ESP_LOGI(TAG, "Web UI registered at /avionmesh");
+            ESP_LOGI(TAG, "Web UI registered at /ui");
         }
     }
 
