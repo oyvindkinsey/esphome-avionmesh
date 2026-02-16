@@ -174,7 +174,8 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                     if (g > 0) json += ",";
                     json += std::to_string(dev.groups[g]);
                 }
-                json += "]";
+                json += "],\"mqtt_exposed\":";
+                json += dev.mqtt_exposed ? "true" : "false";
 
                 auto sit = states.find(dev.avion_id);
                 if (sit != states.end() && sit->second.brightness_known) {
@@ -212,12 +213,23 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                     if (m > 0) json += ",";
                     json += std::to_string(grp.member_ids[m]);
                 }
-                json += "]}";
+                json += "],\"mqtt_exposed\":";
+                json += grp.mqtt_exposed ? "true" : "false";
+                json += "}";
             }
             json += "]}";
             send_event_to(session, "groups", json);
             if (session->fd.load() == 0) return;
         }
+    }
+
+    // Mesh broadcast entity status
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "{\"mesh_mqtt_exposed\":%s}",
+                 hub_->mesh_mqtt_exposed_ ? "true" : "false");
+        send_event_to(session, "mesh_status", buf);
+        if (session->fd.load() == 0) return;
     }
 
     send_event_to(session, "sync_complete", "{}");
@@ -298,6 +310,10 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
         handle_remove_from_group(request);
     } else if (url == "/api/import" && method == HTTP_POST) {
         handle_import(request);
+    } else if (url == "/api/set_mqtt_exposed" && method == HTTP_POST) {
+        handle_set_mqtt_exposed(request);
+    } else if (url == "/api/save" && method == HTTP_POST) {
+        handle_save(request);
     } else if (url == "/api/set_passphrase" && method == HTTP_POST) {
         handle_set_passphrase(request);
     } else if (url == "/api/generate_passphrase" && method == HTTP_POST) {
@@ -746,6 +762,43 @@ void AvionMeshWebHandler::handle_import(AsyncWebServerRequest *request) {
         hub_->pending_actions_.push_back(std::move(act));
     }
     send_json(request, 200, "{\"status\":\"started\"}");
+}
+
+void AvionMeshWebHandler::handle_save(AsyncWebServerRequest *request) {
+    DeferredAction act;
+    act.type = DeferredAction::SaveDb;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
+    send_json(request, 200, "{\"status\":\"ok\"}");
+}
+
+void AvionMeshWebHandler::handle_set_mqtt_exposed(AsyncWebServerRequest *request) {
+    std::string body = read_body(request);
+    if (body.empty()) {
+        send_error(request, 400, "empty_body");
+        return;
+    }
+
+    uint16_t id = 0;
+    bool exposed = false;
+
+    esphome::json::parse_json(body, [&](JsonObject root) -> bool {
+        id = root["id"] | 0u;
+        exposed = root["exposed"] | false;
+        return true;
+    });
+
+    DeferredAction act;
+    act.type = DeferredAction::SetMqttExposed;
+    act.id1 = id;
+    act.id2 = exposed ? 1 : 0;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
+    send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
 void AvionMeshWebHandler::handle_set_passphrase(AsyncWebServerRequest *request) {

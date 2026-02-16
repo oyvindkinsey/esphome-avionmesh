@@ -10,6 +10,11 @@
 #include <cstring>
 #include <ctime>
 
+#ifdef USE_ESP32
+#include <nvs_flash.h>
+#include <nvs.h>
+#endif
+
 static const char *TAG = "avionmesh";
 
 static constexpr uint16_t CSRMESH_SERVICE_UUID16 = 0xFEF1;
@@ -34,6 +39,18 @@ void AvionMeshHub::setup() {
     ESP_LOGI(TAG, "Setting up AvionMesh hub...");
 
     db_.load();
+
+#ifdef USE_ESP32
+    {
+        nvs_handle_t handle;
+        if (nvs_open("avionmesh", NVS_READONLY, &handle) == ESP_OK) {
+            uint8_t val = 0;
+            if (nvs_get_u8(handle, "mesh_mqtt", &val) == ESP_OK)
+                mesh_mqtt_exposed_ = val != 0;
+            nvs_close(handle);
+        }
+    }
+#endif
 
     /* If passphrase was provided in YAML and not yet in NVS, copy it */
     if (!passphrase_.empty() && db_.passphrase().empty()) {
@@ -570,7 +587,7 @@ void AvionMeshHub::process_deferred_actions() {
                     json += std::to_string(dev->product_type);
                     json += ",\"product_name\":\"";
                     json += product_name(dev->product_type);
-                    json += "\",\"groups\":[]}";
+                    json += "\",\"groups\":[],\"mqtt_exposed\":false}";
                     web_handler_->send_event("device_added", json);
                 }
             }
@@ -594,7 +611,7 @@ void AvionMeshHub::process_deferred_actions() {
                     json += std::to_string(group_id);
                     json += ",\"name\":\"";
                     json += act.name;
-                    json += "\",\"members\":[]}";
+                    json += "\",\"members\":[],\"mqtt_exposed\":false}";
                     web_handler_->send_event("group_added", json);
                 }
             }
@@ -685,11 +702,7 @@ void AvionMeshHub::process_deferred_actions() {
                     if (device_id == 0) continue;
                     if (db_.find_device(device_id)) continue;
 
-                    bool has_dim = has_dimming(product_type);
-                    bool has_ct = has_color_temp(product_type);
                     db_.add_device(device_id, product_type, name);
-                    discovery_.publish_light(device_id, name, has_dim, has_ct,
-                                             product_name(product_type));
                     added_devices++;
                 }
 
@@ -700,7 +713,6 @@ void AvionMeshHub::process_deferred_actions() {
                     if (group_id == 0) continue;
                     if (!db_.find_group(group_id)) {
                         db_.add_group(group_id, gname);
-                        discovery_.publish_light(group_id, gname, true, true);
                         added_groups++;
                     }
 
@@ -729,6 +741,96 @@ void AvionMeshHub::process_deferred_actions() {
                 web_handler_->send_event("import_result", buf);
                 web_handler_->reset_sync();
             }
+            break;
+        }
+
+        case DeferredAction::SetMqttExposed: {
+            uint16_t id = act.id1;
+            bool exposed = act.id2 != 0;
+
+            if (id == 0) {
+                /* Mesh broadcast entity */
+                mesh_mqtt_exposed_ = exposed;
+            } else {
+                auto *dev = db_.find_device(id);
+                auto *grp = db_.find_group(id);
+                if (dev)
+                    dev->mqtt_exposed = exposed;
+                else if (grp)
+                    grp->mqtt_exposed = exposed;
+                else
+                    break;
+            }
+
+            if (exposed) {
+                if (id == 0) {
+                    discovery_.publish_light(0, "All Lights", true, true, "Mesh Broadcast");
+                } else {
+                    auto *dev = db_.find_device(id);
+                    if (dev) {
+                        discovery_.publish_light(id, dev->name,
+                                                  has_dimming(dev->product_type),
+                                                  has_color_temp(dev->product_type),
+                                                  product_name(dev->product_type));
+                    } else {
+                        auto *grp = db_.find_group(id);
+                        if (grp)
+                            discovery_.publish_light(id, grp->name, true, true);
+                    }
+                }
+                /* Subscribe MQTT commands */
+                auto *mqtt = esphome::mqtt::global_mqtt_client;
+                if (mqtt) {
+                    bool has_dim = true, has_ct = true;
+                    auto *dev = db_.find_device(id);
+                    if (dev) {
+                        has_dim = has_dimming(dev->product_type);
+                        has_ct = has_color_temp(dev->product_type);
+                    }
+                    mqtt->subscribe(discovery_.command_topic(id),
+                                    [this, id](const std::string &, const std::string &payload) {
+                                        on_switch_command(id, payload);
+                                    }, 0);
+                    if (has_dim) {
+                        mqtt->subscribe(discovery_.brightness_command_topic(id),
+                                        [this, id](const std::string &, const std::string &payload) {
+                                            on_brightness_command(id, payload);
+                                        }, 0);
+                    }
+                    if (has_ct) {
+                        mqtt->subscribe(discovery_.color_temp_command_topic(id),
+                                        [this, id](const std::string &, const std::string &payload) {
+                                            on_color_temp_command(id, payload);
+                                        }, 0);
+                    }
+                }
+            } else {
+                discovery_.remove_light(id);
+            }
+
+            if (web_handler_) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "{\"id\":%u,\"mqtt_exposed\":%s}",
+                         id, exposed ? "true" : "false");
+                web_handler_->send_event("mqtt_toggled", buf);
+            }
+            break;
+        }
+
+        case DeferredAction::SaveDb: {
+            db_.save();
+#ifdef USE_ESP32
+            nvs_handle_t handle;
+            if (nvs_open("avionmesh", NVS_READWRITE, &handle) == ESP_OK) {
+                uint8_t val = mesh_mqtt_exposed_ ? 1 : 0;
+                nvs_set_u8(handle, "mesh_mqtt", val);
+                nvs_commit(handle);
+                nvs_close(handle);
+            }
+#endif
+            ESP_LOGI(TAG, "Database saved");
+            if (web_handler_)
+                web_handler_->send_event("save_result", "{\"status\":\"ok\"}");
             break;
         }
         }
@@ -986,30 +1088,7 @@ void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
     associating_ = true;
     association_start_ms_ = esphome::millis();
 
-    bool has_dim = has_dimming(product_type);
-    bool has_ct = has_color_temp(product_type);
     db_.add_device(device_id, product_type, name);
-    discovery_.publish_light(device_id, name, has_dim, has_ct, product_name(product_type));
-
-    auto *mqtt_client = esphome::mqtt::global_mqtt_client;
-    if (mqtt_client) {
-        mqtt_client->subscribe(discovery_.command_topic(device_id),
-                        [this, device_id](const std::string &, const std::string &payload) {
-                            on_switch_command(device_id, payload);
-                        }, 0);
-        if (has_dim) {
-            mqtt_client->subscribe(discovery_.brightness_command_topic(device_id),
-                            [this, device_id](const std::string &, const std::string &payload) {
-                                on_brightness_command(device_id, payload);
-                            }, 0);
-        }
-        if (has_ct) {
-            mqtt_client->subscribe(discovery_.color_temp_command_topic(device_id),
-                            [this, device_id](const std::string &, const std::string &payload) {
-                                on_color_temp_command(device_id, payload);
-                            }, 0);
-        }
-    }
 }
 
 uint16_t AvionMeshHub::next_device_id() {
@@ -1091,23 +1170,6 @@ void AvionMeshHub::handle_unclaim_device(uint16_t avion_id) {
 
 void AvionMeshHub::handle_create_group(uint16_t group_id, const std::string &name) {
     db_.add_group(group_id, name);
-    discovery_.publish_light(group_id, name, true, true);
-
-    auto *mqtt_client = esphome::mqtt::global_mqtt_client;
-    if (mqtt_client) {
-        mqtt_client->subscribe(discovery_.command_topic(group_id),
-                        [this, group_id](const std::string &, const std::string &payload) {
-                            on_switch_command(group_id, payload);
-                        }, 0);
-        mqtt_client->subscribe(discovery_.brightness_command_topic(group_id),
-                        [this, group_id](const std::string &, const std::string &payload) {
-                            on_brightness_command(group_id, payload);
-                        }, 0);
-        mqtt_client->subscribe(discovery_.color_temp_command_topic(group_id),
-                        [this, group_id](const std::string &, const std::string &payload) {
-                            on_color_temp_command(group_id, payload);
-                        }, 0);
-    }
 
     char buf[128];
     snprintf(buf, sizeof(buf),
@@ -1210,30 +1272,7 @@ void AvionMeshHub::handle_add_discovered(uint16_t device_id, const std::string &
     ESP_LOGI(TAG, "Adding discovered device: id=%u, name=%s, product_type=%u",
              device_id, name.c_str(), product_type);
 
-    bool has_dim = has_dimming(product_type);
-    bool has_ct = has_color_temp(product_type);
     db_.add_device(device_id, product_type, name);
-    discovery_.publish_light(device_id, name, has_dim, has_ct, product_name(product_type));
-
-    auto *mqtt_client = esphome::mqtt::global_mqtt_client;
-    if (mqtt_client) {
-        mqtt_client->subscribe(discovery_.command_topic(device_id),
-                        [this, device_id](const std::string &, const std::string &payload) {
-                            on_switch_command(device_id, payload);
-                        }, 0);
-        if (has_dim) {
-            mqtt_client->subscribe(discovery_.brightness_command_topic(device_id),
-                            [this, device_id](const std::string &, const std::string &payload) {
-                                on_brightness_command(device_id, payload);
-                            }, 0);
-        }
-        if (has_ct) {
-            mqtt_client->subscribe(discovery_.color_temp_command_topic(device_id),
-                            [this, device_id](const std::string &, const std::string &payload) {
-                                on_color_temp_command(device_id, payload);
-                            }, 0);
-        }
-    }
 
     char buf[128];
     snprintf(buf, sizeof(buf),
@@ -1420,14 +1459,20 @@ void AvionMeshHub::on_color_temp_command(uint16_t avion_id, const std::string &p
 
 void AvionMeshHub::publish_all_discovery() {
     for (auto &dev : db_.devices()) {
+        if (!dev.mqtt_exposed)
+            continue;
         bool has_dim = has_dimming(dev.product_type);
         bool has_ct = has_color_temp(dev.product_type);
         discovery_.publish_light(dev.avion_id, dev.name, has_dim, has_ct,
                                   product_name(dev.product_type));
     }
     for (auto &grp : db_.groups()) {
+        if (!grp.mqtt_exposed)
+            continue;
         discovery_.publish_light(grp.group_id, grp.name, true, true);
     }
+    if (mesh_mqtt_exposed_)
+        discovery_.publish_light(0, "All Lights", true, true, "Mesh Broadcast");
 }
 
 void AvionMeshHub::subscribe_all_commands() {
@@ -1455,12 +1500,18 @@ void AvionMeshHub::subscribe_all_commands() {
     };
 
     for (auto &dev : db_.devices()) {
+        if (!dev.mqtt_exposed)
+            continue;
         subscribe_light(dev.avion_id, has_dimming(dev.product_type),
                         has_color_temp(dev.product_type));
     }
     for (auto &grp : db_.groups()) {
+        if (!grp.mqtt_exposed)
+            continue;
         subscribe_light(grp.group_id, true, true);
     }
+    if (mesh_mqtt_exposed_)
+        subscribe_light(0, true, true);
 
     mqtt_subscribed_ = true;
     ESP_LOGI(TAG, "MQTT subscriptions active");
@@ -1522,11 +1573,13 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
     if (!dev)
         return;
 
-    discovery_.publish_on_off_state(avion_id, state.brightness > 0);
-    discovery_.publish_brightness_state(avion_id, state.brightness);
+    if (dev->mqtt_exposed) {
+        discovery_.publish_on_off_state(avion_id, state.brightness > 0);
+        discovery_.publish_brightness_state(avion_id, state.brightness);
 
-    if (state.color_temp_known && has_color_temp(dev->product_type)) {
-        discovery_.publish_color_temp_state(avion_id, state.color_temp);
+        if (state.color_temp_known && has_color_temp(dev->product_type)) {
+            discovery_.publish_color_temp_state(avion_id, state.color_temp);
+        }
     }
 
     if (web_handler_) {

@@ -26,6 +26,8 @@ struct DeferredAction {
         AddToGroup,
         RemoveFromGroup,
         Import,
+        SetMqttExposed,
+        SaveDb,
     };
     Type type;
     uint16_t id1{0};
@@ -117,6 +119,7 @@ class AvionMeshHub : public esphome::Component,
 
     bool mgmt_subscribed_{false};
     bool mqtt_subscribed_{false};
+    bool mesh_mqtt_exposed_{false};
     bool initial_read_done_{false};
     bool time_synced_{false};
 

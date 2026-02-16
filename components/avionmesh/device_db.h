@@ -11,12 +11,14 @@ struct DeviceEntry {
     uint8_t product_type;
     std::string name;
     std::vector<uint16_t> groups;
+    bool mqtt_exposed{false};
 };
 
 struct GroupEntry {
     uint16_t group_id;
     std::string name;
     std::vector<uint16_t> member_ids;
+    bool mqtt_exposed{false};
 };
 
 class DeviceDB {

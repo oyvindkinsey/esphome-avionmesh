@@ -22,8 +22,8 @@ static const char *NVS_KEY_PASSPHRASE = "passphrase";
 
 /*
  * NVS storage format (compact binary):
- * Devices: [count(2)] [id(2) product(1) name_len(1) name(...) group_count(2) groups(2*N)]...
- * Groups:  [count(2)] [id(2) name_len(1) name(...) member_count(2) members(2*N)]...
+ * Devices: [count(2)] [id(2) product(1) flags(1) name_len(1) name(...) group_count(2) groups(2*N)]...
+ * Groups:  [count(2)] [id(2) flags(1) name_len(1) name(...) member_count(2) members(2*N)]...
  */
 #endif
 
@@ -51,6 +51,8 @@ void DeviceDB::load() {
             DeviceEntry d;
             d.avion_id = buf[pos] | (buf[pos + 1] << 8); pos += 2;
             d.product_type = buf[pos++];
+            uint8_t flags = buf[pos++];
+            d.mqtt_exposed = flags & 0x01;
             uint8_t name_len = buf[pos++];
             d.name.assign(reinterpret_cast<char *>(&buf[pos]), name_len); pos += name_len;
             uint16_t gc = buf[pos] | (buf[pos + 1] << 8); pos += 2;
@@ -71,6 +73,8 @@ void DeviceDB::load() {
         for (uint16_t i = 0; i < count && pos < blob_size; i++) {
             GroupEntry g;
             g.group_id = buf[pos] | (buf[pos + 1] << 8); pos += 2;
+            uint8_t gflags = buf[pos++];
+            g.mqtt_exposed = gflags & 0x01;
             uint8_t name_len = buf[pos++];
             g.name.assign(reinterpret_cast<char *>(&buf[pos]), name_len); pos += name_len;
             uint16_t mc = buf[pos] | (buf[pos + 1] << 8); pos += 2;
@@ -104,6 +108,7 @@ void DeviceDB::save() {
     for (auto &d : devices_) {
         buf.push_back(d.avion_id & 0xFF); buf.push_back(d.avion_id >> 8);
         buf.push_back(d.product_type);
+        buf.push_back(d.mqtt_exposed ? 0x01 : 0x00);
         buf.push_back(static_cast<uint8_t>(d.name.size()));
         buf.insert(buf.end(), d.name.begin(), d.name.end());
         uint16_t gc = d.groups.size();
@@ -120,6 +125,7 @@ void DeviceDB::save() {
     buf.push_back(count & 0xFF); buf.push_back(count >> 8);
     for (auto &g : groups_) {
         buf.push_back(g.group_id & 0xFF); buf.push_back(g.group_id >> 8);
+        buf.push_back(g.mqtt_exposed ? 0x01 : 0x00);
         buf.push_back(static_cast<uint8_t>(g.name.size()));
         buf.insert(buf.end(), g.name.begin(), g.name.end());
         uint16_t mc = g.member_ids.size();

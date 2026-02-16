@@ -48,6 +48,8 @@ td{padding:4px 6px;border-bottom:1px solid #333}
   <span><span class="s">Groups:</span> <span id="grpCount" class="v">0</span></span>
   <span><span class="s">RX:</span> <span id="rxCount" class="v">0</span></span>
   <span><span class="s">SSE:</span> <span id="sseDot" class="sse-dot sse-off"></span></span>
+  <button class="sm" onclick="saveDb()" id="btnSave">Save</button>
+  <span id="saveMsg" style="font-size:.8em"></span>
 </div>
 
 <section>
@@ -83,7 +85,7 @@ td{padding:4px 6px;border-bottom:1px solid #333}
 <section>
 <h2>Devices</h2>
 <table id="deviceTable">
-<thead><tr><th>ID</th><th>Name</th><th>Product</th><th>State</th><th>Controls</th><th></th></tr></thead>
+<thead><tr><th>ID</th><th>Name</th><th>Product</th><th>Groups</th><th>MQTT</th><th>State</th><th>Controls</th><th></th></tr></thead>
 <tbody id="deviceBody"></tbody>
 </table>
 </section>
@@ -95,7 +97,7 @@ td{padding:4px 6px;border-bottom:1px solid #333}
   <button onclick="createGroup()">Create Group</button>
 </div>
 <table id="groupTable">
-<thead><tr><th>ID</th><th>Name</th><th>Controls</th><th>Members</th><th>Add Member</th><th></th></tr></thead>
+<thead><tr><th>ID</th><th>Name</th><th>MQTT</th><th>Controls</th><th>Members</th><th>Add Member</th><th></th></tr></thead>
 <tbody id="groupBody"></tbody>
 </table>
 </section>
@@ -108,6 +110,7 @@ td{padding:4px 6px;border-bottom:1px solid #333}
 <script>
 const API = '/api/';
 let devices = [], groups = [], bleState = 0;
+let meshMqttExposed = false;
 let unassocHashes = [];
 let claimingHash = null;
 
@@ -329,21 +332,54 @@ function connectSSE(){
     if(d.color_temp!==undefined) info+=' ct='+d.color_temp+'K';
     feedLog(info);
   });
+
+  evtSource.addEventListener('mesh_status', e=>{
+    const d=JSON.parse(e.data);
+    meshMqttExposed=d.mesh_mqtt_exposed;
+    renderGroups();
+  });
+
+  evtSource.addEventListener('save_result', e=>{
+    $('btnSave').disabled=false;
+    $('saveMsg').textContent='Saved';
+    setTimeout(()=>$('saveMsg').textContent='',3000);
+    feedLog('Database saved');
+  });
+
+  evtSource.addEventListener('mqtt_toggled', e=>{
+    const d=JSON.parse(e.data);
+    if(d.id===0){
+      meshMqttExposed=d.mqtt_exposed;
+      renderGroups();
+    } else {
+      const dev=devices.find(x=>x.avion_id===d.id);
+      if(dev){ dev.mqtt_exposed=d.mqtt_exposed; renderDevices(); }
+      const grp=groups.find(x=>x.group_id===d.id);
+      if(grp){ grp.mqtt_exposed=d.mqtt_exposed; renderGroups(); }
+    }
+    feedLog('MQTT '+(d.mqtt_exposed?'exposed':'hidden')+': #'+d.id);
+  });
 }
 
 function renderDevices(){
   const tb=$('deviceBody');
-  if(!devices.length){tb.innerHTML='<tr><td colspan="6" style="opacity:.5">No devices</td></tr>';return}
+  if(!devices.length){tb.innerHTML='<tr><td colspan="8" style="opacity:.5">No devices</td></tr>';return}
   let h='';
   devices.forEach(d=>{
     const dim=d.brightness!==undefined;
     const ct=d.color_temp!==undefined;
     const on=dim&&d.brightness>0;
     const state=dim?`${on?'ON':'OFF'} (${d.brightness})`+(ct?` ${d.color_temp}K`:''):'--';
+    const grpTags=(d.groups||[]).map(gid=>{
+      const g=groups.find(x=>x.group_id===gid);
+      return `<span class="tag">${g?esc(g.name):gid}</span>`;
+    }).join(' ');
     h+=`<tr>
       <td>${d.avion_id}</td>
       <td>${esc(d.name)}</td>
       <td>${esc(d.product_name)}</td>
+      <td>${grpTags||'<span style="opacity:.5">—</span>'}</td>
+      <td><input type="checkbox" ${d.mqtt_exposed?'checked':''} onchange="toggleMqtt(${d.avion_id},this.checked)"></td>
       <td>${state}</td>
       <td class="controls">
         <button class="sm" onclick="ctrlDev(${d.avion_id},255)">On</button>
@@ -375,6 +411,7 @@ function renderGroups(){
   let h=`<tr>
     <td>0</td>
     <td>All (Broadcast)</td>
+    <td><input type="checkbox" ${meshMqttExposed?'checked':''} onchange="toggleMqtt(0,this.checked)"></td>
     <td class="controls">${ctrlControls(0)}</td>
     <td colspan="2"></td>
     <td></td>
@@ -389,6 +426,7 @@ function renderGroups(){
     h+=`<tr>
       <td>${g.group_id}</td>
       <td>${esc(g.name)}</td>
+      <td><input type="checkbox" ${g.mqtt_exposed?'checked':''} onchange="toggleMqtt(${g.group_id},this.checked)"></td>
       <td class="controls">${ctrlControls(g.group_id)}</td>
       <td>${members||'<span style="opacity:.5">none</span>'}</td>
       <td>${devOpts?`<select id="addMbr${g.group_id}"><option value="">--</option>${devOpts}</select>
@@ -448,6 +486,21 @@ async function addToGrp(gid){
 
 async function rmFromGrp(mid,gid){
   await postJson('remove_from_group',{avion_id:mid,group_id:gid});
+}
+
+async function toggleMqtt(id,exposed){
+  await postJson('set_mqtt_exposed',{id,exposed});
+}
+
+async function saveDb(){
+  $('btnSave').disabled=true;
+  $('saveMsg').textContent='Saving...';
+  try{
+    await postJson('save',{});
+  }catch(e){
+    $('saveMsg').textContent='Error';
+    $('btnSave').disabled=false;
+  }
 }
 
 /* Mesh scan */
