@@ -90,20 +90,63 @@ avionmesh:
 
 ### Initial Setup
 
+#### Starting Fresh
+
 1. Flash the firmware to your ESP32
-2. Navigate to `http://avionmesh.local/avionmesh` in your browser
-3. The web UI will guide you through:
-   - Scanning for Avi-on bridge devices
-   - Discovering unpaired mesh devices
-   - Claiming (pairing) devices
-   - Creating groups
-   - Testing controls
+2. Navigate to `http://avionmesh.local/ui` in your browser
+3. Use the **Generate** button to create a mesh passphrase and save it somewhere safe
+4. Use the web UI to add devices:
+   - **Scan Unassociated** - Find unpaired devices in range
+   - **Claim Device** - Pair discovered devices with custom names
+   - **Manage Groups** - Organize devices into groups
+
+#### Import from Avi-on
+
+If you already have devices set up in the Avi-on app, you can import your existing device names, groups, and passphrase directly from the Avi-on cloud.
+
+> **Security notice:** Review the script before running it — it will authenticate to the Avi-on API with your credentials and POST data to your ESPHome device.
+
+Download and inspect the script first (recommended), then run it:
+
+```bash
+curl -O https://raw.githubusercontent.com/oyvindkinsey/esphome-avionmesh/master/tools/avion_import.py
+# Review avion_import.py before continuing
+python3 avion_import.py --email YOUR_EMAIL --password YOUR_PASSWORD --device avionmesh.local
+```
+
+The script imports your passphrase, device names, and group assignments. Once complete, your devices will appear in Home Assistant via MQTT without any re-pairing.
+
+##### Validating group membership (optional)
+
+The Avi-on cloud stores group assignments server-side, but the actual membership is programmed into each device's firmware. These can drift out of sync. To validate and repair group memberships over BLE before importing, use the [`avionmesh`](https://github.com/oyvindkinsey/avionmesh) library:
+
+1. Install the library (requires Python 3.11+, a BLE adapter, and proximity to your mesh):
+
+   ```bash
+   pip install "avionmesh[cloud]"
+   ```
+
+2. Run the TUI and import from cloud (option **2**):
+
+   ```bash
+   mesh-tui
+   ```
+
+   This creates `mesh_db.json` in the current directory with your passphrase, devices, and groups.
+
+3. Still in `mesh-tui`, select option **8 — Repair group memberships**. This connects to the mesh over BLE, reads the actual group assignments programmed into each device, and updates `mesh_db.json` to reflect the real state.
+
+4. Push the validated database to your ESPHome device:
+
+   ```bash
+   python3 avion_import.py --from-file mesh_db.json --device avionmesh.local
+   ```
 
 ## Usage
 
 ### Web Management Interface
 
-Access the web UI at `http://avionmesh.local/avionmesh`:
+Access the web UI at `http://avionmesh.local/ui`:
 
 - **Status** - View connection state, bridge info, and device list
 - **Discover Mesh** - Scan for all devices on the mesh network
@@ -114,12 +157,13 @@ Access the web UI at `http://avionmesh.local/avionmesh`:
 
 ### MQTT Integration
 
-Devices are automatically exposed to Home Assistant via MQTT discovery. Each device appears as a light with:
+Devices are **not** exported to MQTT by default. Enable MQTT for individual devices and groups via the checkboxes in the web UI — changes take effect immediately without a restart.
+
+Each exported device appears as a light in Home Assistant with:
 
 - **Power** (`state`) - On/off control
 - **Brightness** (`brightness`) - 0-255
 - **Color Temperature** (`color_temp`) - Mireds (153-370)
-```
 
 #### Color Temperature (Mireds to Kelvin)
 
@@ -127,7 +171,7 @@ The component handles the mireds/kelvin conversion automatically:
 
 - Discovery advertises mireds range (`min_mireds`, `max_mireds`)
 - Commands accept mireds (Home Assistant standard)
-- State publishes kelvin values internally to the mesh
+- State publishes mireds (converted from the mesh's internal kelvin values)
 
 Example automation (change warmth without turning on):
 
@@ -140,7 +184,7 @@ automation:
     action:
       - service: mqtt.publish
         data:
-          topic: "avionmesh/broadcast/set"
+          topic: "avionmesh/light/0/set"
           payload: '{"color_temp": 370}'  # Warmest (2700K)
 ```
 
@@ -154,42 +198,10 @@ automation:
 
 This component works with Avi-on Bluetooth mesh lighting products and compatible devices.
 
-## How It Works
+## Dependencies
 
-1. **BLE Gateway** - The ESP32 scans for Avi-on bridge devices and connects to the strongest signal
-2. **Mesh Protocol** - Communicates directly with Avi-on mesh devices using the proprietary protocol
-3. **MQTT Bridge** - Translates MQTT commands to mesh packets and vice versa
-4. **Persistent Storage** - Device database saved to NVS for quick recovery after reboot
-
-## Troubleshooting
-
-### Devices not discovered
-
-- Ensure the ESP32 is within BLE range of your Avi-on devices
-- Check that devices are in pairing mode (usually: power cycle 5x rapidly)
-- Verify the mesh passphrase matches if migrating from another controller
-
-### Migrating from Avi-on
-
-To keep your existing paired devices, use the same passphrase:
-
-1. Extract your existing passphrase from the Avi-on mesh database (stored as base64)
-2. Set it in your YAML: `passphrase: !secret avionmesh_passphrase`
-3. Or set it via the web UI after flashing
-
-The mesh passphrase is the encryption key that allows communication with your paired devices.
-
-### Connection drops
-
-- The component auto-reconnects to bridges with the best RSSI
-- Check logs for BLE connection errors
-- Consider adding a second gateway for larger mesh networks
-
-### MQTT not working
-
-- Confirm MQTT broker is running and accessible
-- Verify `mqtt:` section in your YAML
-- Check Home Assistant's MQTT integration is enabled
+- **Avi-on mesh protocol** — [avionmesh-cpp](https://github.com/oyvindkinsey/avionmesh-cpp) (C++, used at build time) / [avionmesh](https://github.com/oyvindkinsey/avionmesh) (Python, provides `mesh-tui`)
+- **CSRMesh BLE transport** — [recsrmesh-cpp](https://github.com/oyvindkinsey/recsrmesh-cpp) (C++) / [recsrmesh](https://github.com/oyvindkinsey/recsrmesh) (Python)
 
 ## License
 
@@ -198,8 +210,3 @@ LGPL-3.0 License - See LICENSE file for details
 ## Contributing
 
 Contributions welcome! Please open issues or submit pull requests.
-
-## Acknowledgments
-
-- Based on reverse engineering of Avi-on's Bluetooth mesh protocol
-- Built with ESPHome's external component system

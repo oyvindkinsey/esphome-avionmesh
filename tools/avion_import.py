@@ -144,25 +144,57 @@ def send_import(device_ip, payload, username=None, password_http=None):
         raise SystemExit(1)
 
 
+def load_from_file(path):
+    """Load mesh_db.json produced by mesh-tui and convert to ESPHome import payload."""
+    with open(path) as f:
+        db = json.load(f)
+
+    # Reconstruct group members from per-device 'groups' lists
+    group_members = {}
+    for dev in db.get("devices", []):
+        for gid in dev.get("groups", []):
+            group_members.setdefault(gid, []).append(dev["device_id"])
+
+    devices = [
+        {"device_id": d["device_id"], "name": d["name"], "product_type": d.get("product_id", 0)}
+        for d in db.get("devices", [])
+    ]
+    groups = [
+        {"group_id": g["group_id"], "name": g["name"], "members": group_members.get(g["group_id"], [])}
+        for g in db.get("groups", [])
+    ]
+    payload = {"devices": devices, "groups": groups}
+    if db.get("passphrase"):
+        payload["passphrase"] = db["passphrase"]
+    return payload
+
+
 def main():
     parser = argparse.ArgumentParser(description="Import Avi-on cloud data into ESPHome avionmesh device")
-    parser.add_argument("--email", required=True, help="Avi-on account email")
-    parser.add_argument("--password", required=True, help="Avi-on account password")
-    parser.add_argument("--device", required=True, help="ESPHome device IP address")
-    parser.add_argument("--dry-run", action="store_true", help="Fetch from cloud but don't send to device")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--from-file", metavar="PATH", help="Import from a local mesh_db.json (produced by mesh-tui)")
+    source.add_argument("--email", metavar="EMAIL", help="Avi-on account email (cloud import)")
+    parser.add_argument("--password", help="Avi-on account password (required with --email)")
+    parser.add_argument("--device", required=True, help="ESPHome device IP address or hostname")
+    parser.add_argument("--dry-run", action="store_true", help="Show payload but don't send to device")
     parser.add_argument("--no-reset", action="store_true", help="Don't clear existing data before import")
     parser.add_argument("--username", help="HTTP Basic Auth username for the ESPHome device")
     parser.add_argument("--password-http", help="HTTP Basic Auth password for the ESPHome device")
     args = parser.parse_args()
 
-    token = login(args.email, args.password)
-    location_pid, passphrase, token = fetch_location(token)
-    devices, pid_to_avid = fetch_devices(token, location_pid)
-    groups = fetch_groups(token, location_pid, pid_to_avid)
+    if args.from_file:
+        payload = load_from_file(args.from_file)
+    else:
+        if not args.password:
+            parser.error("--password is required with --email")
+        token = login(args.email, args.password)
+        location_pid, passphrase, token = fetch_location(token)
+        devices, pid_to_avid = fetch_devices(token, location_pid)
+        groups = fetch_groups(token, location_pid, pid_to_avid)
+        payload = {"devices": devices, "groups": groups}
+        if passphrase:
+            payload["passphrase"] = passphrase
 
-    payload = {"devices": devices, "groups": groups}
-    if passphrase:
-        payload["passphrase"] = passphrase
     if not args.no_reset:
         payload["reset"] = True
 
