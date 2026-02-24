@@ -1,0 +1,371 @@
+:root {
+  --bg: #1a1a2e;
+  --surface: #252547;
+  --border: #3a3a5e;
+  --text: #e0e0e0;
+  --dim: rgba(224,224,224,.55);
+  --accent: #64b5f6;
+  --accent2: #90caf9;
+  --ok: #66bb6a;
+  --err: #ef5350;
+  --blue: #1565c0;
+  --blue-h: #1976d2;
+  --red: #c62828;
+  --red-h: #d32f2f;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding: 12px 16px;
+  max-width: 1000px;
+  margin: 0 auto;
+  font-size: 14px;
+}
+
+/* ── App header ──────────────────────── */
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-size: 1.2em;
+  font-weight: 700;
+  color: var(--accent);
+  flex: 1;
+  min-width: 120px;
+}
+
+.status-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  background: var(--surface);
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: .82em;
+}
+
+.status-bar .s { color: var(--dim) }
+.status-bar .v { font-weight: 600 }
+.ble-ok  { color: var(--ok) }
+.ble-bad { color: var(--err) }
+
+.sse-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50% }
+.sse-on  { background: var(--ok) }
+.sse-off { background: var(--err) }
+
+.save-msg { font-size: .8em; color: var(--dim) }
+
+/* ── Sections ────────────────────────── */
+section { margin-bottom: 20px }
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.section-title {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--accent2);
+  flex: 1;
+}
+
+/* ── Card grid ───────────────────────── */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+/* ── Card ────────────────────────────── */
+.card {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-name {
+  font-weight: 600;
+  font-size: .95em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-sub { font-size: .78em; color: var(--dim) }
+
+/* ── Card header (name + state pill) ─── */
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.state-pill {
+  font-size: .7em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.state-pill.on  { background: rgba(102,187,106,.18); color: var(--ok) }
+.state-pill.off { background: rgba(255,255,255,.06); color: var(--dim) }
+.state-pill.unknown { display: none }
+
+/* ── On/Off row ──────────────────────── */
+.on-off {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.on-off .toggle-row { margin-left: auto }
+
+/* ── Tags ────────────────────────────── */
+.tags { display: flex; flex-wrap: wrap; gap: 3px }
+
+.tag {
+  display: inline-block;
+  background: #2e3d4f;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: .75em;
+}
+
+.tag a { color: var(--err); text-decoration: none; margin-left: 3px }
+.tag a:hover { color: #ff7070 }
+
+/* ── Toggle switch (MQTT) ────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: .8em;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 30px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.toggle input { opacity: 0; width: 0; height: 0 }
+
+.knob {
+  position: absolute;
+  inset: 0;
+  background: #444;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .2s;
+}
+
+.knob::before {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform .2s;
+}
+
+.toggle input:checked + .knob { background: var(--blue) }
+.toggle input:checked + .knob::before { transform: translateX(14px) }
+
+/* ── Details / Controls panel ────────── */
+details.ctrl {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+details.ctrl > summary {
+  font-size: .8em;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+details.ctrl > summary::before {
+  content: '▶';
+  font-size: .6em;
+  transition: transform .15s;
+  display: inline-block;
+  opacity: .7;
+}
+
+details.ctrl[open] > summary::before { transform: rotate(90deg) }
+
+.ctrl-body {
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slider-row { display: flex; flex-direction: column; gap: 3px }
+
+.slider-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: .76em;
+  color: var(--dim);
+}
+
+.slider-row input[type=range] { width: 100%; cursor: pointer; accent-color: var(--blue) }
+
+/* ── Member management in group ──────── */
+.member-add { display: flex; gap: 5px; align-items: center; flex-wrap: wrap }
+
+/* ── Card actions ────────────────────── */
+.card-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: auto;
+  padding-top: 2px;
+  flex-wrap: wrap;
+}
+
+/* ── Buttons ─────────────────────────── */
+button {
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: .85em;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+button:hover     { background: var(--blue-h) }
+button:disabled  { opacity: .4; cursor: not-allowed }
+button.danger    { background: var(--red) }
+button.danger:hover { background: var(--red-h) }
+button.sm        { padding: 3px 8px; font-size: .78em }
+button.ghost     { background: transparent; border: 1px solid var(--border); color: var(--text) }
+button.ghost:hover { background: rgba(255,255,255,.06) }
+
+/* ── Text inputs ─────────────────────── */
+input[type=text],
+input[type=password],
+input[type=number],
+select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid #555;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: .85em;
+  font-family: inherit;
+}
+
+input:focus, select:focus { outline: none; border-color: var(--accent) }
+select { cursor: pointer }
+
+/* ── Collapsible detail sections ─────── */
+details.section {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+details.section > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: .9em;
+  font-weight: 600;
+  color: var(--dim);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+details.section > summary::before {
+  content: '▶';
+  font-size: .65em;
+  transition: transform .15s;
+  display: inline-block;
+}
+
+details.section[open] > summary::before { transform: rotate(90deg) }
+details.section > summary:hover { color: var(--text) }
+
+.section-body { padding: 12px }
+
+/* ── Scan table ──────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: .83em }
+th { text-align: left; padding: 4px 6px; color: var(--accent2); border-bottom: 1px solid #444 }
+td { padding: 5px 6px; border-bottom: 1px solid var(--border) }
+
+/* ── Messages ────────────────────────── */
+.msg { padding: 6px 10px; border-radius: 4px; margin: 6px 0; font-size: .83em }
+.msg-ok  { background: #1b5e20; color: #a5d6a7 }
+.msg-err { background: #b71c1c; color: #ef9a9a }
+
+/* ── Spinner ─────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #555;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin { to { transform: rotate(360deg) } }
+
+/* ── Event feed ──────────────────────── */
+#eventFeed {
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: .78em;
+  line-height: 1.6;
+}
+
+#eventFeed div { padding: 2px 4px; border-bottom: 1px solid var(--border) }
+
+/* ── Utilities ───────────────────────── */
+.hidden  { display: none }
+.empty   { color: var(--dim); font-size: .85em; padding: 16px 0; text-align: center }
+.row     { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px }
+.mono    { font-family: monospace }

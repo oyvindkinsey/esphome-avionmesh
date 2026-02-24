@@ -4,644 +4,84 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Avionmesh</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;padding:12px;max-width:800px;margin:0 auto}
-h1{font-size:1.3em;margin-bottom:8px;color:#64b5f6}
-h2{font-size:1.1em;margin:16px 0 8px;color:#90caf9;border-bottom:1px solid #333;padding-bottom:4px}
-.status-bar{background:#252547;padding:8px 12px;border-radius:6px;margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:.85em}
-.status-bar .s{opacity:.7}
-.status-bar .v{font-weight:600}
-.ble-ok{color:#66bb6a}.ble-bad{color:#ef5350}
-section{background:#252547;border-radius:6px;padding:12px;margin-bottom:12px}
-button{background:#1565c0;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:.85em}
-button:hover{background:#1976d2}
-button:disabled{opacity:.5;cursor:not-allowed}
-button.danger{background:#c62828}button.danger:hover{background:#d32f2f}
-button.sm{padding:3px 8px;font-size:.8em}
-input,select{background:#1a1a2e;color:#e0e0e0;border:1px solid #444;padding:5px 8px;border-radius:4px;font-size:.85em}
-input:focus,select:focus{outline:none;border-color:#64b5f6}
-table{width:100%;border-collapse:collapse;font-size:.85em}
-th{text-align:left;padding:4px 6px;color:#90caf9;border-bottom:1px solid #444}
-td{padding:4px 6px;border-bottom:1px solid #333}
-.controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.slider{width:100px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-.msg{padding:6px;border-radius:4px;margin:6px 0;font-size:.85em}
-.msg-ok{background:#1b5e20;color:#a5d6a7}.msg-err{background:#b71c1c;color:#ef9a9a}
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid #666;border-top-color:#64b5f6;border-radius:50%;animation:spin .8s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.hidden{display:none}
-.tag{display:inline-block;background:#37474f;padding:1px 6px;border-radius:3px;font-size:.8em;margin:1px}
-#eventFeed{max-height:200px;overflow-y:auto;font-family:monospace;font-size:.8em;line-height:1.5}
-#eventFeed div{padding:2px 4px;border-bottom:1px solid #333}
-.sse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px}
-.sse-on{background:#66bb6a}.sse-off{background:#ef5350}
-</style>
+<link rel="stylesheet" href="/ui.css">
 </head>
 <body>
-<h1>Avionmesh Manager</h1>
 
-<div class="status-bar" id="statusBar">
-  <span><span class="s">BLE:</span> <span id="bleState" class="v">--</span></span>
-  <span><span class="s">Devices:</span> <span id="devCount" class="v">0</span></span>
-  <span><span class="s">Groups:</span> <span id="grpCount" class="v">0</span></span>
-  <span><span class="s">RX:</span> <span id="rxCount" class="v">0</span></span>
-  <span><span class="s">SSE:</span> <span id="sseDot" class="sse-dot sse-off"></span></span>
-  <button class="sm" onclick="saveDb()" id="btnSave">Save</button>
-  <span id="saveMsg" style="font-size:.8em"></span>
-</div>
+<header class="app-header">
+  <span class="app-title">Avionmesh</span>
+  <div class="status-bar">
+    <span><span class="s">BLE:</span> <span id="bleState" class="v ble-bad">--</span></span>
+    <span><span class="s">Devices:</span> <span id="devCount" class="v">0</span></span>
+    <span><span class="s">Groups:</span> <span id="grpCount" class="v">0</span></span>
+    <span><span class="s">RX:</span> <span id="rxCount" class="v">0</span></span>
+    <span id="sseDot" class="sse-dot sse-off"></span>
+  </div>
+  <button class="sm ghost" onclick="saveDb()" id="btnSave">Save</button>
+  <span id="saveMsg" class="save-msg"></span>
+</header>
 
 <section>
-<h2>Setup</h2>
-<div class="row">
-  <input id="newPassphrase" type="password" placeholder="Base64 passphrase (≥16 decoded)" style="width:240px">
-  <button onclick="setPassphrase()">Set Passphrase</button>
-  <button onclick="generatePassphrase()">Generate New</button>
-</div>
-<div class="row" style="margin-top:8px">
-  <button class="danger" onclick="factoryReset()">Factory Reset (Clear All)</button>
-</div>
-<div id="setupMsg"></div>
+  <div class="section-header">
+    <h2 class="section-title">Devices</h2>
+  </div>
+  <div id="deviceGrid" class="card-grid">
+    <p class="empty">Connecting&hellip;</p>
+  </div>
 </section>
 
 <section>
-<h2>Scan &amp; Add Devices</h2>
-<div class="row">
-  <button onclick="startMeshScan()" id="btnMeshScan">Mesh Ping Scan</button>
-  <button onclick="startUnassocScan()" id="btnUnassocScan">Unassociated Scan</button>
-</div>
-<div id="scanMsg"></div>
-<table id="scanResults" class="hidden">
-<thead><tr><th>ID</th><th>FW</th><th>Vendor</th><th>Product</th><th>Status</th><th></th></tr></thead>
-<tbody id="scanBody"></tbody>
-</table>
-<div id="unassocResults" class="hidden">
-  <h3 style="font-size:.9em;margin:8px 0 4px">Unassociated Devices</h3>
-  <div id="unassocList"></div>
-</div>
+  <div class="section-header">
+    <h2 class="section-title">Groups</h2>
+    <input id="newGrpName" type="text" placeholder="Group name" style="width:130px">
+    <button class="sm" onclick="createGroup()">+ Create</button>
+  </div>
+  <div id="groupGrid" class="card-grid">
+    <p class="empty">Connecting&hellip;</p>
+  </div>
 </section>
 
-<section>
-<h2>Devices</h2>
-<table id="deviceTable">
-<thead><tr><th>ID</th><th>Name</th><th>Product</th><th>Groups</th><th>MQTT</th><th>State</th><th>Controls</th><th></th></tr></thead>
-<tbody id="deviceBody"></tbody>
-</table>
-</section>
+<details class="section">
+  <summary>Scan &amp; Add Devices</summary>
+  <div class="section-body">
+    <div class="row">
+      <button onclick="startMeshScan()" id="btnMeshScan">Mesh Ping Scan</button>
+      <button onclick="startUnassocScan()" id="btnUnassocScan">Scan for New</button>
+    </div>
+    <div id="scanMsg"></div>
+    <table id="scanResults" class="hidden" style="margin-top:8px">
+      <thead><tr><th>ID</th><th>FW</th><th>Vendor</th><th>Product</th><th>Status</th><th></th></tr></thead>
+      <tbody id="scanBody"></tbody>
+    </table>
+    <div id="unassocResults" class="hidden" style="margin-top:8px">
+      <div style="font-size:.82em;color:var(--dim);margin-bottom:6px">Unassociated Devices</div>
+      <div id="unassocList"></div>
+    </div>
+  </div>
+</details>
 
-<section>
-<h2>Groups</h2>
-<div class="row" style="margin-bottom:8px">
-  <input id="newGrpName" placeholder="Group name" style="width:140px">
-  <button onclick="createGroup()">Create Group</button>
-</div>
-<table id="groupTable">
-<thead><tr><th>ID</th><th>Name</th><th>MQTT</th><th>Controls</th><th>Members</th><th>Add Member</th><th></th></tr></thead>
-<tbody id="groupBody"></tbody>
-</table>
-</section>
+<details class="section">
+  <summary>Setup</summary>
+  <div class="section-body">
+    <div class="row">
+      <input id="newPassphrase" type="password" placeholder="Base64 passphrase (&ge;16 decoded)" style="width:260px">
+      <button onclick="setPassphrase()">Set</button>
+      <button onclick="generatePassphrase()">Generate</button>
+    </div>
+    <div id="setupMsg"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="danger" onclick="factoryReset()">Factory Reset</button>
+    </div>
+  </div>
+</details>
 
-<section>
-<h2>Event Feed</h2>
-<div id="eventFeed"></div>
-</section>
+<details class="section">
+  <summary>Event Feed</summary>
+  <div class="section-body">
+    <div id="eventFeed"></div>
+  </div>
+</details>
 
-<script>
-const API = '/api/';
-let devices = [], groups = [], bleState = 0;
-let meshMqttExposed = false;
-let unassocHashes = [];
-let claimingHash = null;
-
-const BLE_NAMES = ['Idle','Scanning','Connecting','Discovering','Ready','Disconnected'];
-const PRODUCTS = [
-  {v:0,n:'Group'},{v:90,n:'Lamp Dimmer'},{v:93,n:'Recessed DL'},
-  {v:94,n:'Light Adapter'},{v:97,n:'Smart Dimmer'},{v:134,n:'Smart Bulb'},
-  {v:137,n:'Surface DL'},{v:162,n:'Micro Edge'},{v:167,n:'Smart Switch'}
-];
-
-function $(id){return document.getElementById(id)}
-async function api(path,opts){
-  const r=await fetch(API+path,opts);
-  if(!r.ok){
-    const err=await r.json().catch(()=>({error:r.statusText}));
-    const msg=err.error||err.message||'API error '+r.status;
-    // User-friendly error messages
-    if(msg==='mesh_not_initialized')throw new Error('Mesh not initialized - set a passphrase first');
-    if(msg==='ble_not_ready')throw new Error('BLE not ready - check connection status');
-    throw new Error(msg);
-  }
-  const text=await r.text();
-  feedLog('API response: '+text.substring(0,200));
-  return JSON.parse(text);
-}
-async function postJson(path,data){return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})}
-
-function showMsg(el,text,ok){
-  el.className='msg '+(ok?'msg-ok':'msg-err');
-  el.textContent=text;
-  setTimeout(()=>el.textContent='',5000);
-}
-
-function productSelect(selected){
-  let h='<select class="prod-sel">';
-  PRODUCTS.forEach(p=>{
-    if(p.v===0) return;
-    h+=`<option value="${p.v}"${p.v===selected?' selected':''}>${p.n}</option>`;
-  });
-  return h+'</select>';
-}
-
-function feedLog(text){
-  const feed=$('eventFeed');
-  const d=document.createElement('div');
-  const ts=new Date().toLocaleTimeString();
-  d.textContent=ts+' '+text;
-  feed.prepend(d);
-  while(feed.children.length>50) feed.lastChild.remove();
-}
-
-/* ---- SSE ---- */
-let evtSource = null;
-
-function updateStatusBar(){
-  const bs=$('bleState');
-  bs.textContent=BLE_NAMES[bleState]||'?';
-  bs.className='v '+(bleState===4?'ble-ok':'ble-bad');
-  $('devCount').textContent=devices.length;
-  $('grpCount').textContent=groups.length;
-}
-
-function connectSSE(){
-  if(evtSource) evtSource.close();
-  evtSource = new EventSource(API+'events');
-
-  evtSource.onopen = ()=>{
-    $('sseDot').className='sse-dot sse-on';
-    devices=[];
-    groups=[];
-    feedLog('SSE connected');
-  };
-
-  evtSource.onerror = ()=>{
-    $('sseDot').className='sse-dot sse-off';
-  };
-
-  evtSource.addEventListener('meta', e=>{
-    const d=JSON.parse(e.data);
-    bleState=d.ble_state;
-    $('rxCount').textContent=d.rx_count;
-    updateStatusBar();
-  });
-
-  evtSource.addEventListener('devices', e=>{
-    const d=JSON.parse(e.data);
-    (d.devices||[]).forEach(dev=>{
-      const idx=devices.findIndex(x=>x.avion_id===dev.avion_id);
-      if(idx>=0) devices[idx]=dev; else devices.push(dev);
-    });
-    updateStatusBar();
-    renderDevices();
-  });
-
-  evtSource.addEventListener('groups', e=>{
-    const d=JSON.parse(e.data);
-    (d.groups||[]).forEach(grp=>{
-      const idx=groups.findIndex(x=>x.group_id===grp.group_id);
-      if(idx>=0) groups[idx]=grp; else groups.push(grp);
-    });
-    updateStatusBar();
-    renderGroups();
-  });
-
-  evtSource.addEventListener('sync_complete', e=>{
-    feedLog('Initial sync complete: '+devices.length+' devices, '+groups.length+' groups');
-    updateStatusBar();
-    renderDevices();
-    renderGroups();
-  });
-
-  evtSource.addEventListener('device_added', e=>{
-    const d=JSON.parse(e.data);
-    const idx=devices.findIndex(x=>x.avion_id===d.avion_id);
-    if(idx>=0) devices[idx]=d; else devices.push(d);
-    updateStatusBar();
-    renderDevices();
-    feedLog('Device added: '+d.name+' (#'+d.avion_id+')');
-  });
-
-  evtSource.addEventListener('device_removed', e=>{
-    const d=JSON.parse(e.data);
-    devices=devices.filter(x=>x.avion_id!==d.avion_id);
-    updateStatusBar();
-    renderDevices();
-    renderGroups();
-    feedLog('Device removed: #'+d.avion_id);
-  });
-
-  evtSource.addEventListener('group_added', e=>{
-    const d=JSON.parse(e.data);
-    const idx=groups.findIndex(x=>x.group_id===d.group_id);
-    if(idx>=0) groups[idx]=d; else groups.push(d);
-    updateStatusBar();
-    renderGroups();
-    feedLog('Group added: '+d.name+' (#'+d.group_id+')');
-  });
-
-  evtSource.addEventListener('group_removed', e=>{
-    const d=JSON.parse(e.data);
-    groups=groups.filter(x=>x.group_id!==d.group_id);
-    updateStatusBar();
-    renderGroups();
-    feedLog('Group removed: #'+d.group_id);
-  });
-
-  evtSource.addEventListener('group_updated', e=>{
-    const d=JSON.parse(e.data);
-    const idx=groups.findIndex(x=>x.group_id===d.group_id);
-    if(idx>=0) groups[idx]=d; else groups.push(d);
-    renderGroups();
-    feedLog('Group updated: '+d.name+' (#'+d.group_id+')');
-  });
-
-  evtSource.addEventListener('discover_mesh', e=>{
-    const d=JSON.parse(e.data);
-    $('btnMeshScan').disabled=false;
-    $('btnMeshScan').textContent='Mesh Ping Scan';
-    renderScanResults(d.devices||[]);
-    feedLog('Mesh scan: '+((d.devices||[]).length)+' device(s) found');
-  });
-
-  evtSource.addEventListener('scan_unassoc', e=>{
-    const d=JSON.parse(e.data);
-    $('btnUnassocScan').disabled=false;
-    $('btnUnassocScan').textContent='Unassociated Scan';
-    renderUnassoc(d.uuid_hashes||[]);
-    feedLog('Unassoc scan: '+((d.uuid_hashes||[]).length)+' device(s)');
-  });
-
-  evtSource.addEventListener('claim_result', e=>{
-    const d=JSON.parse(e.data);
-    feedLog('Claim result: '+(d.status==='ok'?'assigned ID '+d.device_id:d.message||'failed'));
-    if(d.status==='ok' && claimingHash){
-      const idx = unassocHashes.indexOf(claimingHash);
-      if(idx >= 0){
-        const row = $('unassocRow'+idx);
-        if(row) row.remove();
-        unassocHashes.splice(idx,1);
-      }
-      claimingHash = null;
-    }
-  });
-
-  evtSource.addEventListener('examine', e=>{
-    const d=JSON.parse(e.data);
-    const res=$('exRes'+d.avion_id);
-    const btn=$('exBtn'+d.avion_id);
-    if(btn) btn.disabled=false;
-    if(res){
-      if(d.error)
-        res.innerHTML='<span style="color:#ef5350">'+d.error+'</span>';
-      else
-        res.innerHTML=`FW ${d.fw} | Vendor ${d.vendor_id} | CSR ${d.csr_product_id} | Flags ${d.flags}`;
-      setTimeout(()=>res.textContent='',15000);
-    }
-    feedLog('Examine #'+d.avion_id+': '+(d.error||'ok'));
-  });
-
-  evtSource.addEventListener('debug', e=>{
-    feedLog('DEBUG: '+e.data);
-  });
-
-  evtSource.addEventListener('import_result', e=>{
-    const d=JSON.parse(e.data);
-    showMsg($('setupMsg'),`Import complete: ${d.added_devices} devices, ${d.added_groups} groups added`,true);
-  });
-
-  evtSource.addEventListener('state', e=>{
-    const d=JSON.parse(e.data);
-    const dev=devices.find(x=>x.avion_id===d.avion_id);
-    if(dev){
-      dev.brightness=d.brightness;
-      if(d.color_temp!==undefined) dev.color_temp=d.color_temp;
-      renderDevices();
-    }
-    const name=dev?dev.name:'#'+d.avion_id;
-    let info=name+': brightness='+d.brightness;
-    if(d.color_temp!==undefined) info+=' ct='+d.color_temp+'K';
-    feedLog(info);
-  });
-
-  evtSource.addEventListener('mesh_status', e=>{
-    const d=JSON.parse(e.data);
-    meshMqttExposed=d.mesh_mqtt_exposed;
-    renderGroups();
-  });
-
-  evtSource.addEventListener('save_result', e=>{
-    $('btnSave').disabled=false;
-    $('saveMsg').textContent='Saved';
-    setTimeout(()=>$('saveMsg').textContent='',3000);
-    feedLog('Database saved');
-  });
-
-  evtSource.addEventListener('mqtt_toggled', e=>{
-    const d=JSON.parse(e.data);
-    if(d.id===0){
-      meshMqttExposed=d.mqtt_exposed;
-      renderGroups();
-    } else {
-      const dev=devices.find(x=>x.avion_id===d.id);
-      if(dev){ dev.mqtt_exposed=d.mqtt_exposed; renderDevices(); }
-      const grp=groups.find(x=>x.group_id===d.id);
-      if(grp){ grp.mqtt_exposed=d.mqtt_exposed; renderGroups(); }
-    }
-    feedLog('MQTT '+(d.mqtt_exposed?'exposed':'hidden')+': #'+d.id);
-  });
-}
-
-function renderDevices(){
-  const tb=$('deviceBody');
-  if(!devices.length){tb.innerHTML='<tr><td colspan="8" style="opacity:.5">No devices</td></tr>';return}
-  let h='';
-  devices.forEach(d=>{
-    const dim=d.brightness!==undefined;
-    const ct=d.color_temp!==undefined;
-    const on=dim&&d.brightness>0;
-    const state=dim?`${on?'ON':'OFF'} (${d.brightness})`+(ct?` ${d.color_temp}K`:''):'--';
-    const grpTags=(d.groups||[]).map(gid=>{
-      const g=groups.find(x=>x.group_id===gid);
-      return `<span class="tag">${g?esc(g.name):gid}</span>`;
-    }).join(' ');
-    h+=`<tr>
-      <td>${d.avion_id}</td>
-      <td>${esc(d.name)}</td>
-      <td>${esc(d.product_name)}</td>
-      <td>${grpTags||'<span style="opacity:.5">—</span>'}</td>
-      <td><input type="checkbox" ${d.mqtt_exposed?'checked':''} onchange="toggleMqtt(${d.avion_id},this.checked)"></td>
-      <td>${state}</td>
-      <td class="controls">
-        <button class="sm" onclick="ctrlDev(${d.avion_id},255)">On</button>
-        <button class="sm" onclick="ctrlDev(${d.avion_id},0)">Off</button>
-        <input type="range" class="slider" min="0" max="255" value="${d.brightness||0}"
-          onchange="ctrlDev(${d.avion_id},+this.value)">
-      </td>
-      <td>
-        <button class="sm" id="exBtn${d.avion_id}" onclick="examDev(${d.avion_id})">Examine</button>
-        <button class="sm danger" onclick="removeDev(${d.avion_id})">Remove</button>
-        <div id="exRes${d.avion_id}" style="font-size:.8em;margin-top:2px"></div>
-      </td>
-    </tr>`;
-  });
-  tb.innerHTML=h;
-}
-
-function ctrlControls(id){
-  return `<button class="sm" onclick="ctrlDev(${id},255)">On</button>
-    <button class="sm" onclick="ctrlDev(${id},0)">Off</button>
-    <input type="range" class="slider" min="0" max="255" value="0"
-      onchange="ctrlDev(${id},+this.value)">
-    <input type="number" placeholder="K" style="width:60px" min="2000" max="6500"
-      onchange="ctrlTemp(${id},+this.value)">`;
-}
-
-function renderGroups(){
-  const tb=$('groupBody');
-  let h=`<tr>
-    <td>0</td>
-    <td>All (Broadcast)</td>
-    <td><input type="checkbox" ${meshMqttExposed?'checked':''} onchange="toggleMqtt(0,this.checked)"></td>
-    <td class="controls">${ctrlControls(0)}</td>
-    <td colspan="2"></td>
-    <td></td>
-  </tr>`;
-  groups.forEach(g=>{
-    const members=g.members.map(mid=>{
-      const d=devices.find(x=>x.avion_id===mid);
-      return `<span class="tag">${d?esc(d.name):mid} <a href="#" onclick="rmFromGrp(${mid},${g.group_id});return false" style="color:#ef5350">&times;</a></span>`;
-    }).join(' ');
-    const devOpts=devices.filter(d=>!g.members.includes(d.avion_id))
-      .map(d=>`<option value="${d.avion_id}">${esc(d.name)}</option>`).join('');
-    h+=`<tr>
-      <td>${g.group_id}</td>
-      <td>${esc(g.name)}</td>
-      <td><input type="checkbox" ${g.mqtt_exposed?'checked':''} onchange="toggleMqtt(${g.group_id},this.checked)"></td>
-      <td class="controls">${ctrlControls(g.group_id)}</td>
-      <td>${members||'<span style="opacity:.5">none</span>'}</td>
-      <td>${devOpts?`<select id="addMbr${g.group_id}"><option value="">--</option>${devOpts}</select>
-        <button class="sm" onclick="addToGrp(${g.group_id})">Add</button>`:''}</td>
-      <td><button class="sm danger" onclick="delGroup(${g.group_id})">Delete</button></td>
-    </tr>`;
-  });
-  tb.innerHTML=h;
-}
-
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-
-async function ctrlDev(id,brightness){
-  await postJson('control',{avion_id:id,brightness});
-}
-
-async function ctrlTemp(id,kelvin){
-  if(kelvin) await postJson('control',{avion_id:id,color_temp:kelvin});
-}
-
-async function examDev(id){
-  const btn=$('exBtn'+id);
-  const res=$('exRes'+id);
-  btn.disabled=true;
-  res.innerHTML='<span class="spinner"></span> Examining...';
-  try{
-    await postJson('examine_device',{avion_id:id});
-  }catch(e){
-    btn.disabled=false;
-    res.innerHTML='<span style="color:#ef5350">Error</span>';
-  }
-}
-
-async function removeDev(id){
-  if(!confirm(`Remove device ${id}?`)) return;
-  await postJson('unclaim_device',{avion_id:id});
-}
-
-async function createGroup(){
-  const name=$('newGrpName').value;
-  if(!name) return;
-  await postJson('create_group',{name});
-  $('newGrpName').value='';
-}
-
-async function delGroup(id){
-  if(!confirm(`Delete group ${id}?`)) return;
-  await postJson('delete_group',{group_id:id});
-}
-
-async function addToGrp(gid){
-  const sel=$('addMbr'+gid);
-  const mid=+sel.value;
-  if(!mid) return;
-  await postJson('add_to_group',{avion_id:mid,group_id:gid});
-}
-
-async function rmFromGrp(mid,gid){
-  await postJson('remove_from_group',{avion_id:mid,group_id:gid});
-}
-
-async function toggleMqtt(id,exposed){
-  await postJson('set_mqtt_exposed',{id,exposed});
-}
-
-async function saveDb(){
-  $('btnSave').disabled=true;
-  $('saveMsg').textContent='Saving...';
-  try{
-    await postJson('save',{});
-  }catch(e){
-    $('saveMsg').textContent='Error';
-    $('btnSave').disabled=false;
-  }
-}
-
-/* Mesh scan */
-async function startMeshScan(){
-  const btn=$('btnMeshScan');
-  btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Scanning...';
-  $('scanResults').classList.remove('hidden');
-  $('scanBody').innerHTML='<tr><td colspan="6"><span class="spinner"></span> Scanning mesh...</td></tr>';
-  try{
-    await postJson('discover_mesh',{});
-  }catch(e){
-    btn.disabled=false;btn.textContent='Mesh Ping Scan';
-    $('scanBody').innerHTML=`<tr><td colspan="6" style="color:#ef5350">Error: ${e.message}</td></tr>`;
-  }
-}
-
-function renderScanResults(devs){
-  $('scanResults').classList.remove('hidden');
-  const tb=$('scanBody');
-  if(!devs.length){tb.innerHTML='<tr><td colspan="6" style="opacity:.5">No devices found</td></tr>';return}
-  let h='';
-  devs.forEach(d=>{
-    h+=`<tr>
-      <td>${d.device_id}</td>
-      <td>${d.fw}</td>
-      <td>${d.vendor_id}</td>
-      <td>${d.csr_product_id}</td>
-      <td>${d.known?'<span style="color:#66bb6a">Known</span>':'New'}</td>
-      <td>${d.known?'':
-        `<input placeholder="Name" id="sn${d.device_id}" style="width:100px" value="Device ${d.device_id}">
-         ${productSelect(0)}
-         <button class="sm" onclick="addScanned(${d.device_id})">Add</button>`}</td>
-    </tr>`;
-  });
-  tb.innerHTML=h;
-}
-
-async function addScanned(did){
-  const name=$('sn'+did).value||('Device '+did);
-  const sel=$('sn'+did).parentElement.querySelector('.prod-sel');
-  const pt=sel?+sel.value:134;
-  await postJson('add_discovered',{device_id:did,name,product_type:pt});
-  showMsg($('scanMsg'),'Device added','ok');
-}
-
-/* Unassociated scan */
-async function startUnassocScan(){
-  const btn=$('btnUnassocScan');
-  btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Scanning...';
-  $('unassocResults').classList.remove('hidden');
-  $('unassocList').innerHTML='<span class="spinner"></span> Scanning...';
-  try{
-    await postJson('scan_unassociated',{});
-  }catch(e){
-    btn.disabled=false;btn.textContent='Scan for New Devices';
-    $('unassocList').innerHTML=`<span style="color:#ef5350">Error: ${e.message}</span>`;
-  }
-}
-
-function renderUnassoc(hashes){
-  $('unassocResults').classList.remove('hidden');
-  const el=$('unassocList');
-  unassocHashes = hashes;
-  if(!hashes.length){el.innerHTML='<span style="opacity:.5">No unassociated devices found</span>';return}
-  let h='';
-  hashes.forEach((hash,i)=>{
-    h+=`<div class="row" style="margin:4px 0" id="unassocRow${i}">
-      <span style="font-family:monospace">${hash}</span>
-      <input placeholder="Name" id="cn${i}" style="width:100px">
-      ${productSelect(134)}
-      <button class="sm" id="claimBtn${i}" onclick="claimDev('${hash}',${i})">Claim</button>
-      <span id="claimMsg${i}" style="font-size:.8em;margin-left:6px"></span>
-    </div>`;
-  });
-  el.innerHTML=h;
-}
-
-async function claimDev(hash,idx){
-  claimingHash = hash;
-  const btn=$('claimBtn'+idx);
-  const msg=$('claimMsg'+idx);
-  const name=$('cn'+idx).value||('Unknown Device');
-  const sel=$('cn'+idx).parentElement.querySelector('.prod-sel');
-  const pt=sel?+sel.value:134;
-  const uuidHash=parseInt(hash,16);
-  btn.disabled=true;
-  btn.textContent='Claiming...';
-  msg.textContent='Starting claim...';
-  await postJson('claim_device',{uuid_hash:uuidHash,name,product_type:pt});
-}
-
-/* Setup functions */
-async function setPassphrase(){
-  const passphrase=$('newPassphrase').value;
-  const msgEl=$('setupMsg');
-  if(!passphrase){
-    showMsg(msgEl,'Passphrase cannot be empty',false);
-    return;
-  }
-  if(passphrase.length<8){
-    showMsg(msgEl,'Passphrase must be at least 8 characters',false);
-    return;
-  }
-  // Optional: validate base64 format (for new format)
-  if(passphrase.length%4===0){
-    try{
-      const decoded=atob(passphrase);
-      if(decoded.length<16){
-        showMsg(msgEl,'Base64 passphrase must decode to at least 16 bytes (got '+decoded.length+')',false);
-        return;
-      }
-    }catch(e){
-      showMsg(msgEl,'Invalid base64 format',false);
-      return;
-    }
-  }
-  await postJson('set_passphrase',{passphrase});
-  showMsg(msgEl,'Passphrase set successfully - mesh will reconnect',true);
-  $('newPassphrase').value='';
-}
-
-async function generatePassphrase(){
-  const msgEl=$('setupMsg');
-  const res=await postJson('generate_passphrase',{});
-  if(res.passphrase){
-    showMsg(msgEl,'Generated: '+res.passphrase,true);
-    $('newPassphrase').value='';
-  }else{
-    showMsg(msgEl,'Failed to generate passphrase',false);
-  }
-}
-
-async function factoryReset(){
-  if(!confirm('Factory reset will remove all devices, groups, and passphrase. Continue?')) return;
-  const msgEl=$('setupMsg');
-  await postJson('factory_reset',{});
-  showMsg(msgEl,'Factory reset complete - page will reload',true);
-  setTimeout(()=>location.reload(),2000);
-}
-
-connectSSE();
-</script>
+<script src="/ui.js"></script>
 </body>
 </html>

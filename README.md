@@ -26,8 +26,26 @@ Avi-on's official ecosystem requires their mobile app and cloud service, which c
 
 ## Hardware Requirements
 
-- ESP32 board (POE-supported boards like `esp32-poe` recommended for always-on gateways)
+- ESP32 board with wired Ethernet (**strongly recommended** — see below)
 - Avi-on BLE mesh devices
+
+### Why Wired Ethernet?
+
+The ESP32's radio is shared between Wi-Fi and Bluetooth. When Wi-Fi is active, it competes with BLE for airtime, which can cause missed packets, increased latency, and unreliable mesh communication.
+
+Using a board with a dedicated Ethernet PHY (connected via RMII or SPI) keeps Wi-Fi off entirely, leaving the radio exclusively for BLE. This results in noticeably more reliable mesh control.
+
+**Recommended boards:**
+
+| Board | PHY | Notes |
+|-------|-----|-------|
+| **WT32-ETH01** | LAN8720 (RMII) | Compact, widely available, popular for ESPHome |
+| **Olimex ESP32-POE** | LAN8720 (RMII) | PoE-powered, open hardware |
+| **Olimex ESP32-POE-ISO** | LAN8720 (RMII) | Isolated PoE variant |
+| **Olimex ESP32-GATEWAY** | LAN8720 (RMII) | No PoE, lower cost |
+| **LilyGO T-ETH-Lite** | W5500 (SPI) | ESP32-S3 based |
+
+The minimal configuration example below uses the Olimex ESP32-POE pinout.
 
 ## Installation
 
@@ -41,7 +59,7 @@ esphome:
   friendly_name: "Avi-on Mesh"
 
 esp32:
-  board: esp32-poe
+  variant: ESP32
   framework:
     type: esp-idf
 

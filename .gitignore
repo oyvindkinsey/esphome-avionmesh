@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 .secrets/
 components/avionmesh/web_content.h
+components/avionmesh/web_style.h
+components/avionmesh/web_script.h
 avionmesh.yaml
 secrets.yaml

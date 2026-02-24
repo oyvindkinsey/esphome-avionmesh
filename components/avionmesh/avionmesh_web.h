@@ -36,6 +36,7 @@ class AvionMeshWebHandler : public AsyncWebHandler {
 
     std::mutex sse_mutex_;
     std::vector<SseSession *> sse_sessions_;
+    uint32_t last_state_read_ms_{0};
 
     std::string read_body(AsyncWebServerRequest *request);
 
@@ -43,6 +44,8 @@ class AvionMeshWebHandler : public AsyncWebHandler {
     void send_initial_sync(SseSession *session);
 
     void handle_index(AsyncWebServerRequest *request);
+    void handle_style(AsyncWebServerRequest *request);
+    void handle_script(AsyncWebServerRequest *request);
     void handle_events(AsyncWebServerRequest *request);
     void handle_discover_mesh_post(AsyncWebServerRequest *request);
     void handle_scan_unassociated_post(AsyncWebServerRequest *request);

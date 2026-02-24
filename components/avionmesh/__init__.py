@@ -100,26 +100,29 @@ async def to_code(config):
     script_path = os.path.join(os.path.dirname(__file__), "fix_cmake.py")
     cg.add_platformio_option("extra_scripts", [f"pre:{script_path}"])
 
-    # Gzip web.html → web_content.h
+    # Gzip web assets → C headers
     comp_dir = os.path.dirname(__file__)
-    html_path = os.path.join(comp_dir, "web.html")
-    header_path = os.path.join(comp_dir, "web_content.h")
 
-    with open(html_path, "rb") as f:
-        raw = f.read()
-    compressed = gzip.compress(raw, compresslevel=9)
+    def _embed_asset(src_name, header_name, symbol):
+        src = os.path.join(comp_dir, src_name)
+        hdr = os.path.join(comp_dir, header_name)
+        with open(src, "rb") as f:
+            raw = f.read()
+        compressed = gzip.compress(raw, compresslevel=9)
+        hex_lines = []
+        for i in range(0, len(compressed), 16):
+            chunk = compressed[i : i + 16]
+            hex_lines.append(", ".join(f"0x{b:02x}" for b in chunk))
+        with open(hdr, "w") as f:
+            f.write("#pragma once\n")
+            f.write("#include <cstdint>\n")
+            f.write("#include <cstddef>\n\n")
+            f.write(f"// Auto-generated from {src_name} — do not edit\n")
+            f.write(f"static const uint8_t {symbol}[] = {{\n")
+            f.write(",\n".join(f"    {line}" for line in hex_lines))
+            f.write("\n};\n\n")
+            f.write(f"static const size_t {symbol}_SIZE = {len(compressed)};\n")
 
-    hex_lines = []
-    for i in range(0, len(compressed), 16):
-        chunk = compressed[i : i + 16]
-        hex_lines.append(", ".join(f"0x{b:02x}" for b in chunk))
-
-    with open(header_path, "w") as f:
-        f.write("#pragma once\n")
-        f.write("#include <cstdint>\n")
-        f.write("#include <cstddef>\n\n")
-        f.write("// Auto-generated from web.html — do not edit\n")
-        f.write(f"static const uint8_t AVIONMESH_WEB_HTML[] = {{\n")
-        f.write(",\n".join(f"    {line}" for line in hex_lines))
-        f.write("\n};\n\n")
-        f.write(f"static const size_t AVIONMESH_WEB_HTML_SIZE = {len(compressed)};\n")
+    _embed_asset("web.html", "web_content.h", "AVIONMESH_WEB_HTML")
+    _embed_asset("web.css",  "web_style.h",   "AVIONMESH_WEB_STYLE")
+    _embed_asset("web.js",   "web_script.h",  "AVIONMESH_WEB_SCRIPT")

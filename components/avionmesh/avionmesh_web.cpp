@@ -1,6 +1,8 @@
 #include "avionmesh_web.h"
 #include "avionmesh_hub.h"
 #include "web_content.h"
+#include "web_style.h"
+#include "web_script.h"
 
 #include "esphome/core/log.h"
 #include "esphome/components/json/json_util.h"
@@ -265,15 +267,30 @@ void AvionMeshWebHandler::sse_loop() {
         }
     }
 
+    bool did_sync = false;
     for (size_t i = 0; i < pending_count; i++) {
-        if (pending[i]->fd.load() != 0)
+        if (pending[i]->fd.load() != 0) {
             send_initial_sync(pending[i]);
+            did_sync = true;
+        }
+    }
+
+    // Refresh mesh state on every new UI connection (debounced to 10 s)
+    if (did_sync && hub_->mesh_initialized_) {
+        uint32_t now = esphome::millis();
+        if (now - last_state_read_ms_ > 10000) {
+            last_state_read_ms_ = now;
+            hub_->read_all_dimming();
+            hub_->set_timeout("sse_color_read", 1000, [this]() {
+                hub_->read_all_color();
+            });
+        }
     }
 }
 
 bool AvionMeshWebHandler::canHandle(AsyncWebServerRequest *request) const {
     std::string url = request->url();
-    return url == "/ui" || url.rfind("/api/", 0) == 0;
+    return url == "/ui" || url == "/ui.css" || url == "/ui.js" || url.rfind("/api/", 0) == 0;
 }
 
 void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
@@ -284,6 +301,10 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
 
     if (url == "/ui") {
         handle_index(request);
+    } else if (url == "/ui.css") {
+        handle_style(request);
+    } else if (url == "/ui.js") {
+        handle_script(request);
     } else if (url == "/api/events" && method == HTTP_GET) {
         handle_events(request);
     } else if (url == "/api/discover_mesh" && method == HTTP_POST) {
@@ -375,6 +396,22 @@ void AvionMeshWebHandler::send_error(AsyncWebServerRequest *request, int code,
 void AvionMeshWebHandler::handle_index(AsyncWebServerRequest *request) {
     auto *response = request->beginResponse(200, "text/html",
                                              AVIONMESH_WEB_HTML, AVIONMESH_WEB_HTML_SIZE);
+    response->addHeader("Content-Encoding", "gzip");
+    response->addHeader("Cache-Control", "public, max-age=3600");
+    request->send(response);
+}
+
+void AvionMeshWebHandler::handle_style(AsyncWebServerRequest *request) {
+    auto *response = request->beginResponse(200, "text/css",
+                                             AVIONMESH_WEB_STYLE, AVIONMESH_WEB_STYLE_SIZE);
+    response->addHeader("Content-Encoding", "gzip");
+    response->addHeader("Cache-Control", "public, max-age=3600");
+    request->send(response);
+}
+
+void AvionMeshWebHandler::handle_script(AsyncWebServerRequest *request) {
+    auto *response = request->beginResponse(200, "application/javascript",
+                                             AVIONMESH_WEB_SCRIPT, AVIONMESH_WEB_SCRIPT_SIZE);
     response->addHeader("Content-Encoding", "gzip");
     response->addHeader("Cache-Control", "public, max-age=3600");
     request->send(response);
@@ -747,9 +784,9 @@ void AvionMeshWebHandler::handle_import(AsyncWebServerRequest *request) {
     httpd_req_t *req = *request;
     ESP_LOGI(TAG, "handle_import: content_len=%d", req->content_len);
     std::string body = read_body(request);
-    ESP_LOGI(TAG, "handle_import: body_len=%zu content: '%s'", body.size(), body.c_str());
+    ESP_LOGI(TAG, "handle_import: body_len=%zu", body.size());
     if (body.empty()) {
-        ESP_LOGW(TAG, "handle_import: body is empty!");
+        ESP_LOGW(TAG, "handle_import: empty body");
         send_error(request, 400, "empty_body");
         return;
     }
