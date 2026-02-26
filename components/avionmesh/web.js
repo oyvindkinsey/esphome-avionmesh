@@ -100,7 +100,7 @@ function deviceCard(d) {
     <button class="sm ghost" onclick="ctrlDev(${d.avion_id},0)">Off</button>
     <label class="toggle-row">
       <span class="toggle">
-        <input type="checkbox" ${d.mqtt_exposed ? 'checked' : ''} onchange="toggleMqtt(${d.avion_id},this.checked)">
+        <input type="checkbox" ${d.mqtt_exposed ? 'checked' : ''} onchange="toggleMqtt(${d.avion_id},this.checked,this)">
         <span class="knob"></span>
       </span>
       MQTT
@@ -192,7 +192,7 @@ function groupCard(g) {
   </div>
   <label class="toggle-row">
     <span class="toggle">
-      <input type="checkbox" ${g.mqtt_exposed ? 'checked' : ''} onchange="toggleMqtt(${g.group_id},this.checked)">
+      <input type="checkbox" ${g.mqtt_exposed ? 'checked' : ''} onchange="toggleMqtt(${g.group_id},this.checked,this)">
       <span class="knob"></span>
     </span>
     MQTT
@@ -441,8 +441,13 @@ async function removeDev(id) {
   await postJson('unclaim_device', {avion_id: id});
 }
 
-async function toggleMqtt(id, exposed) {
-  await postJson('set_mqtt_exposed', {id, exposed});
+async function toggleMqtt(id, exposed, cb) {
+  try {
+    await postJson('set_mqtt_exposed', {id, exposed});
+  } catch(e) {
+    if (cb) cb.checked = !exposed;
+    feedLog('MQTT toggle failed: ' + e.message);
+  }
 }
 
 /* ── Groups ──────────────────────────────── */

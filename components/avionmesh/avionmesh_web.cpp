@@ -365,11 +365,8 @@ std::string AvionMeshWebHandler::read_body(AsyncWebServerRequest *request) {
         int ret = httpd_req_recv(req, &body[total_read], len - total_read);
         ESP_LOGD(TAG, "read_body loop: recv=%d total=%zu", ret, total_read);
         if (ret <= 0) {
-            if (total_read == 0) {
-                ESP_LOGW(TAG, "read_body: no data available");
-                return {};
-            }
-            break;
+            ESP_LOGW(TAG, "read_body: recv error (ret=%d after %zu/%zu bytes)", ret, total_read, len);
+            return {};
         }
         total_read += ret;
     }
