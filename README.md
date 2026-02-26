@@ -202,8 +202,8 @@ automation:
     action:
       - service: mqtt.publish
         data:
-          topic: "avionmesh/light/0/set"
-          payload: '{"color_temp": 370}'  # Warmest (2700K)
+          topic: "avionmesh/light/0/color_temp/set"
+          payload: "370"  # Warmest (2700K), value in mireds
 ```
 
 ## Configuration Options
