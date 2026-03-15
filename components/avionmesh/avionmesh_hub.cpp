@@ -11,6 +11,7 @@
 
 #include <cstring>
 #include <ctime>
+#include <set>
 
 #ifdef USE_ESP32
 #include <nvs_flash.h>
@@ -1661,55 +1662,89 @@ void AvionMeshHub::do_sse_emit(const std::string &event, const std::string &data
 
 /* ---- Group state latch ---- */
 
+// Returns true if device `mid` is a member of group `gid`.
+static bool is_group_member(const GroupEntry &grp, uint16_t mid) {
+    for (auto m : grp.member_ids)
+        if (m == mid) return true;
+    return false;
+}
+
 void AvionMeshHub::check_group_state_latch(uint16_t avid) {
-    for (auto &grp : db_.groups()) {
-        bool is_member = false;
-        for (auto mid : grp.member_ids)
-            if (mid == avid) { is_member = true; break; }
-        if (!is_member || grp.member_ids.empty())
-            continue;
+    auto avit = device_states_.find(avid);
+    if (avit == device_states_.end() || !avit->second.brightness_known)
+        return;
+    uint8_t brightness = avit->second.brightness;
 
-        bool all_brightness_known = true;
-        bool all_brightness_match = true;
-        bool all_ct_known = true;
-        uint8_t ref_brightness = 0;
-        uint16_t ref_ct = 0;
-        bool first = true;
+    // 1. candidate_groups: every group avid belongs to.
+    std::vector<uint16_t> candidate_ids;
+    for (auto &grp : db_.groups())
+        if (is_group_member(grp, avid))
+            candidate_ids.push_back(grp.group_id);
+    if (candidate_ids.empty())
+        return;
 
-        for (auto mid : grp.member_ids) {
-            auto it = device_states_.find(mid);
-            if (it == device_states_.end() || !it->second.brightness_known) {
-                all_brightness_known = false;
+    // 2. For each candidate group G, look for an exclusive witness:
+    //    a member of G that is NOT in any other candidate group AND has
+    //    reported the same brightness (proving G specifically was triggered).
+    std::set<uint16_t> triggered;
+    for (uint16_t gid : candidate_ids) {
+        auto *grp = db_.find_group(gid);
+        if (!grp) continue;
+
+        for (auto mid : grp->member_ids) {
+            // Is mid exclusive to gid within candidate_ids?
+            bool exclusive = true;
+            for (uint16_t other : candidate_ids) {
+                if (other == gid) continue;
+                auto *og = db_.find_group(other);
+                if (og && is_group_member(*og, mid)) { exclusive = false; break; }
+            }
+            if (!exclusive) continue;
+
+            // Did this exclusive witness report the same brightness?
+            auto sit = device_states_.find(mid);
+            if (sit != device_states_.end() &&
+                sit->second.brightness_known &&
+                sit->second.brightness == brightness) {
+                triggered.insert(gid);
                 break;
             }
-            if (first) {
-                ref_brightness = it->second.brightness;
-                if (it->second.color_temp_known)
-                    ref_ct = it->second.color_temp;
-                else
-                    all_ct_known = false;
-                first = false;
-            } else {
-                if (it->second.brightness != ref_brightness)
-                    all_brightness_match = false;
-                if (all_ct_known) {
-                    if (!it->second.color_temp_known || it->second.color_temp != ref_ct)
-                        all_ct_known = false;
-                }
+        }
+    }
+    if (triggered.empty())
+        return;
+
+    // 3. Propagation: fixed-point expansion — also latch any group H whose
+    //    members are all contained within an already-triggered group (H ⊆ G).
+    //    Iterate until stable (handles chains like G1 ⊆ G2 ⊆ G3).
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto &h : db_.groups()) {
+            if (triggered.count(h.group_id) || h.member_ids.empty())
+                continue;
+            for (uint16_t tgid : triggered) {
+                auto *tg = db_.find_group(tgid);
+                if (!tg) continue;
+                bool subset = true;
+                for (auto hmid : h.member_ids)
+                    if (!is_group_member(*tg, hmid)) { subset = false; break; }
+                if (subset) { triggered.insert(h.group_id); changed = true; break; }
             }
         }
+    }
 
-        if (!all_brightness_known || !all_brightness_match)
-            continue;
-
-        auto &gstate = device_states_[grp.group_id];
-        gstate.brightness = ref_brightness;
+    // 4. Latch all triggered (and propagated) groups.
+    for (uint16_t gid : triggered) {
+        auto &gstate = device_states_[gid];
+        gstate.brightness = brightness;
         gstate.brightness_known = true;
-        if (all_ct_known) {
-            gstate.color_temp = ref_ct;
+        // Carry CT only if the reporting device has a known CT value.
+        if (avit->second.color_temp_known) {
+            gstate.color_temp = avit->second.color_temp;
             gstate.color_temp_known = true;
         }
-        publish_device_state(grp.group_id);
+        publish_device_state(gid);
     }
 }
 

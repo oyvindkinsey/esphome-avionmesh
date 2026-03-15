@@ -24,6 +24,7 @@ Home Assistant users with Avi-on BLE mesh lights who want local control and auto
 | 4 | **Silent color temp** — adjust warmth without changing on/off or brightness state |
 | 5 | **Web UI** — discover, pair, group, and control devices from a browser |
 | 6 | **Import tool** — `avion_import.py` migrates passphrase + devices from Avi-on cloud |
+| 7 | **Group state inference** — when an external controller commands a group, infer and publish the group's MQTT state from the resulting device updates (CSRMesh RX carries no explicit group-command notification) |
 
 ## Key Design Decisions
 

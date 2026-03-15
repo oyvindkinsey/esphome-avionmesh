@@ -52,6 +52,32 @@ Devices and groups are not exposed to MQTT by default. When enabled:
 
 When disabled: empty retained payload published to the discovery topic.
 
+## Group State Inference
+
+CSRMesh provides no notification that a group command was received — only the resulting per-device state updates are visible. When an external controller (wall switch, Avi-on app) commands a group, the component infers the group state from those individual device updates.
+
+### Algorithm
+
+**Exclusive-witness rule** — when device D reports brightness B:
+
+1. `candidate_groups` = all groups D belongs to.
+2. For each candidate group G, find an *exclusive witness*: a member of G that is **not** in any other candidate group **and** has reported brightness B. If found, G was triggered; latch G's state to B.
+
+A device belonging to only one group is its own exclusive witness — it latches that group immediately on first report, without waiting for other members. A device shared across multiple groups is ambiguous until a member exclusive to one of those groups reports.
+
+**Subset-propagation rule** — when group G is latched, also latch any group H where `H.members ⊆ G.members`. This handles nested configurations:
+
+| Scenario | Result |
+|----------|--------|
+| Wall switch commands inner group G1 | G1 latched; outer group G2 ⊇ G1 is **not** latched (no evidence G2 was involved) |
+| Wall switch commands outer group G2 | G2 latched; G1 ⊆ G2 is also latched (all G1 devices received the G2 command) |
+| G3 ⊇ G2 ⊇ G1, exclusive G3 member reports | All three latched via fixed-point propagation |
+
+### Limitations
+
+- A group with no exclusive members (all members are also in another group) can never be self-latched; it is only latched via propagation from a triggered superset.
+- If a device misses a BLE packet, its state remains stale until the next periodic refresh or the next command.
+
 ## Color Temperature
 
 The mesh operates in kelvin (2700–6500 K). The component converts at the boundary:

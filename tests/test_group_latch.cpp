@@ -1,5 +1,5 @@
-// Tests: check_group_state_latch() — group brightness is latched when all
-// member devices converge to the same brightness over BLE.
+// Tests: check_group_state_latch() — group brightness is latched via
+// exclusive-witness + subset-propagation algorithm.
 
 #include "mock_hub.h"
 #include <gtest/gtest.h>
@@ -24,26 +24,30 @@ protected:
     }
 };
 
-// Only one device has reported — group must NOT latch yet.
-TEST_F(GroupLatchTest, PartialConvergence_NoLatch) {
+// A single-group device is its own exclusive witness — latches immediately
+// without waiting for other members.
+TEST_F(GroupLatchTest, SingleGroupDevice_LatchesImmediately) {
     hub.inject_brightness(DEV_A, 128);
 
-    bool group_state_published = false;
+    ASSERT_EQ(hub.states().count(GROUP_1), 1u);
+    EXPECT_EQ(hub.states().at(GROUP_1).brightness, 128);
+
+    bool group_sse = false;
     for (auto &[ev, data] : hub.sse_events)
         if (data.find("\"avion_id\":" + std::to_string(GROUP_1)) != std::string::npos)
-            group_state_published = true;
-
-    EXPECT_FALSE(group_state_published) << "group should not latch with only one member reporting";
-    EXPECT_EQ(hub.states().count(GROUP_1), 0u);
+            group_sse = true;
+    EXPECT_TRUE(group_sse) << "SSE state event must be emitted for group on latch";
 }
 
-// Both devices report but with different brightness — group must NOT latch.
-TEST_F(GroupLatchTest, DivergentBrightness_NoLatch) {
+// Both devices report different brightnesses (sequential individual commands).
+// Each exclusive-witness update latches the group; the last one wins.
+TEST_F(GroupLatchTest, DivergentReports_LatestValueWins) {
     hub.inject_brightness(DEV_A, 128);
     hub.inject_brightness(DEV_B, 64);
 
-    EXPECT_EQ(hub.states().count(GROUP_1), 0u)
-        << "group should not latch when members have different brightness";
+    ASSERT_EQ(hub.states().count(GROUP_1), 1u);
+    EXPECT_EQ(hub.states().at(GROUP_1).brightness, 64u)
+        << "last exclusive-witness report wins";
 }
 
 // Both devices report the same brightness — group MUST latch.
@@ -90,13 +94,15 @@ TEST_F(GroupLatchTest, ConvergedBrightness_MqttExposed_PublishesMqtt) {
     EXPECT_TRUE(found_brightness) << "expected brightness/state MQTT publish for group";
 }
 
-// After divergence, subsequent re-convergence must latch again.
-TEST_F(GroupLatchTest, Reconvergence_LatchesAgain) {
-    hub.inject_brightness(DEV_A, 100);
-    hub.inject_brightness(DEV_B, 50);  // diverge
-    EXPECT_EQ(hub.states().count(GROUP_1), 0u);
+// Each single-group update latches; after a second group command the group
+// reflects the new brightness.
+TEST_F(GroupLatchTest, SuccessiveGroupCommands_GroupTracksLatest) {
+    hub.inject_brightness(DEV_A, 100);  // latch GROUP_1 = 100
+    hub.inject_brightness(DEV_B, 100);  // same value, GROUP_1 stays 100
 
-    hub.inject_brightness(DEV_A, 50);  // now both = 50
+    hub.inject_brightness(DEV_A, 50);   // new command at 50
+    hub.inject_brightness(DEV_B, 50);
+
     ASSERT_EQ(hub.states().count(GROUP_1), 1u);
     EXPECT_EQ(hub.states().at(GROUP_1).brightness, 50u);
 }

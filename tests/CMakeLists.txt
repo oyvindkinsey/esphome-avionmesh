@@ -29,6 +29,7 @@ set(SOURCES
     ${AVIONMESH_LIB}/src/types.cpp
     stubs/stubs.cpp
     test_group_latch.cpp
+    test_group_latch_v2.cpp
     test_mqtt_commands.cpp
     test_sse_events.cpp
     test_api_control.cpp
