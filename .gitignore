@@ -7,3 +7,4 @@ components/avionmesh/web_script.h
 avionmesh.yaml
 secrets.yaml
 .esphome
+tests/build/
