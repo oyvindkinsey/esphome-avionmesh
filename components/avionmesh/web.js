@@ -79,8 +79,9 @@ function deviceCard(d) {
   const on = knownBri && d.brightness > 0;
   const stateText = knownBri ? (on ? `ON · ${d.brightness}` : 'OFF') : '';
   const stateClass = knownBri ? (on ? 'on' : 'off') : 'unknown';
-  const hasCT = d.color_temp !== undefined;
-  const ctVal = hasCT ? d.color_temp : 2700;
+  const hasDim = d.has_dimming !== false;
+  const hasCT  = d.has_color_temp === true;
+  const ctVal  = d.color_temp ?? 2700;
 
   const grpTags = (d.groups || []).map(gid => {
     const g = groups.find(x => x.group_id === gid);
@@ -110,7 +111,7 @@ function deviceCard(d) {
   <details class="ctrl">
     <summary>Controls</summary>
     <div class="ctrl-body">
-      <div class="slider-row">
+      ${hasDim ? `<div class="slider-row">
         <div class="slider-label">
           <span>Brightness</span>
           <span id="bv${d.avion_id}">${knownBri ? d.brightness : '—'}</span>
@@ -118,16 +119,16 @@ function deviceCard(d) {
         <input type="range" min="0" max="255" value="${d.brightness ?? 0}" class="bri-range"
           oninput="$('bv${d.avion_id}').textContent=this.value"
           onchange="ctrlDev(${d.avion_id},+this.value)">
-      </div>
-      <div class="slider-row">
+      </div>` : ''}
+      ${hasCT ? `<div class="slider-row">
         <div class="slider-label">
           <span>Color temp</span>
-          <span id="cv${d.avion_id}">${hasCT ? ctVal + 'K' : '—'}</span>
+          <span id="cv${d.avion_id}">${d.color_temp ? ctVal + 'K' : '—'}</span>
         </div>
         <input type="range" min="2000" max="6500" step="100" value="${ctVal}" class="ct-range"
           oninput="$('cv${d.avion_id}').textContent=this.value+'K'"
           onchange="ctrlTemp(${d.avion_id},+this.value)">
-      </div>
+      </div>` : ''}
       <div class="card-actions">
         <button class="sm ghost" id="exBtn${d.avion_id}" onclick="examDev(${d.avion_id})">Examine</button>
         <button class="sm danger" onclick="removeDev(${d.avion_id})">Remove</button>

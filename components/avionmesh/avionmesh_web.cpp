@@ -178,6 +178,10 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                 }
                 json += "],\"mqtt_exposed\":";
                 json += dev.mqtt_exposed ? "true" : "false";
+                json += ",\"has_dimming\":";
+                json += has_dimming(dev.product_type) ? "true" : "false";
+                json += ",\"has_color_temp\":";
+                json += has_color_temp(dev.product_type) ? "true" : "false";
 
                 auto sit = states.find(dev.avion_id);
                 if (sit != states.end() && sit->second.brightness_known) {
