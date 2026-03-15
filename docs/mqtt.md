@@ -52,6 +52,29 @@ Devices and groups are not exposed to MQTT by default. When enabled:
 
 When disabled: empty retained payload published to the discovery topic.
 
+## Virtual Zero (Minimum Brightness)
+
+Some dimmers are wired to loads (e.g. trailing-edge dimmers, LED drivers) that only respond above a minimum drive level. A brightness value below this level behaves identically to off from the load's perspective, but the dimmer reports a non-zero value.
+
+Each device can have a `min_brightness` value (uint8, 0 = disabled) configured via the UI or API.
+
+### Clamping rule
+
+> If `brightness > 0 && brightness < min_brightness` → use `min_brightness` instead.
+
+Applied symmetrically at the BLE↔MQTT boundary:
+
+| Direction | Input | Output |
+|-----------|-------|--------|
+| BLE → MQTT (state publish) | `0` | `0` (OFF) |
+| BLE → MQTT | `1`–`min_brightness - 1` | `min_brightness` |
+| BLE → MQTT | `min_brightness`–`255` | unchanged |
+| MQTT → BLE (command) | `0` (OFF) | `0` |
+| MQTT → BLE | `1`–`min_brightness - 1` | `min_brightness` |
+| MQTT → BLE | `min_brightness`–`255` | unchanged |
+
+Setting `min_brightness = 0` disables clamping (default).
+
 ## Group State Inference
 
 CSRMesh provides no notification that a group command was received — only the resulting per-device state updates are visible. When an external controller (wall switch, Avi-on app) commands a group, the component infers the group state from those individual device updates.

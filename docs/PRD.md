@@ -25,6 +25,7 @@ Home Assistant users with Avi-on BLE mesh lights who want local control and auto
 | 5 | **Web UI** — discover, pair, group, and control devices from a browser |
 | 6 | **Import tool** — `avion_import.py` migrates passphrase + devices from Avi-on cloud |
 | 7 | **Group state inference** — when an external controller commands a group, infer and publish the group's MQTT state from the resulting device updates (CSRMesh RX carries no explicit group-command notification) |
+| 8 | **Virtual zero (min brightness)** — per-device configurable floor value; non-zero BLE/MQTT brightness values below this threshold are clamped up to the threshold, supporting dimmers wired to loads that only respond above a minimum drive level |
 
 ## Key Design Decisions
 

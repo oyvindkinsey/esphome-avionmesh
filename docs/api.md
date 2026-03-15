@@ -28,6 +28,7 @@ All endpoints: `POST`, `Content-Type: application/json`, except `/api/events`.
 | `POST /api/add_to_group` | Add a device to a group |
 | `POST /api/remove_from_group` | Remove a device from a group |
 | `POST /api/set_mqtt_exposed` | Enable/disable MQTT for a device, group, or broadcast (id=0) |
+| `POST /api/set_min_brightness` | Set virtual-zero threshold for a device (`avion_id`, `min_brightness` 0–255) |
 | `POST /api/save` | Persist DB to NVS |
 | `POST /api/set_passphrase` | Set mesh passphrase |
 | `POST /api/generate_passphrase` | Generate and store a new random passphrase |
@@ -41,10 +42,10 @@ Emitted to all connected clients. An initial sync is sent to each new client on 
 | Event | Payload fields |
 |-------|----------------|
 | `meta` | `ble_state`, `rx_count` |
-| `devices` | `devices[]` |
+| `devices` | `devices[]` — each: `avion_id`, `name`, `product_type`, `product_name`, `groups`, `mqtt_exposed`, `has_dimming`, `has_color_temp`, `min_brightness`, optionally `brightness`, `color_temp` |
 | `groups` | `groups[]` |
 | `sync_complete` | _(none)_ |
-| `device_added` | `avion_id`, `name`, `product_type`, `product_name`, `groups`, `mqtt_exposed` |
+| `device_added` | `avion_id`, `name`, `product_type`, `product_name`, `groups`, `mqtt_exposed`, `has_dimming`, `has_color_temp`, `min_brightness` |
 | `device_removed` | `avion_id` |
 | `group_added` | `group_id`, `name`, `members`, `mqtt_exposed` |
 | `group_removed` | `group_id` |

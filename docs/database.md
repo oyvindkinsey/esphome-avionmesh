@@ -4,11 +4,12 @@
 
 ```
 DeviceEntry
-├── avion_id:      uint16   (range 32896–65407)
-├── product_type:  uint8
-├── name:          string
-├── groups:        uint16[] (group IDs this device belongs to)
-└── mqtt_exposed:  bool
+├── avion_id:       uint16   (range 32896–65407)
+├── product_type:   uint8
+├── name:           string
+├── groups:         uint16[] (group IDs this device belongs to)
+├── mqtt_exposed:   bool
+└── min_brightness: uint8    (0 = disabled; non-zero clamps brightness to this floor)
 
 GroupEntry
 ├── group_id:      uint16   (range 256–24575)
@@ -34,14 +35,17 @@ Every mutation (add/remove device or group, group membership change, passphrase 
 
 ### Binary Format (little-endian)
 
+Format version byte precedes the device count. Current version: `1`.
+
 ```
-Devices: [count u16] ( [avion_id u16] [product_type u8] [flags u8]
-                        [name_len u8] [name...] [group_count u16] [group_id u16 * N] ) * count
+Devices: [version u8] [count u16] ( [avion_id u16] [product_type u8] [flags u8] [min_brightness u8]
+                                     [name_len u8] [name...] [group_count u16] [group_id u16 * N] ) * count
 
 Groups:  [count u16] ( [group_id u16] [flags u8]
                         [name_len u8] [name...] [member_count u16] [member_id u16 * N] ) * count
 
 flags: bit 0 = mqtt_exposed
+On load, version 0 (legacy) blobs are accepted with min_brightness defaulting to 0.
 ```
 
 ## Passphrase
