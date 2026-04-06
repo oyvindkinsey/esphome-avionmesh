@@ -105,12 +105,18 @@ void MqttDiscovery::publish_light(uint16_t avion_id, const std::string &name,
     }
 
     config += "\"device\":{";
-    config += "\"identifiers\":[\"" + std::string(uid) + "\"],";
-    config += "\"name\":\"" + name + "\",";
-    config += "\"manufacturer\":\"Avi-on\",";
-    if (!product_name.empty())
-        config += "\"model\":\"" + product_name + "\",";
-    config += "\"via_device\":\"" + node_name_ + "\"";
+    if (single_device_) {
+        config += "\"identifiers\":[\"" + node_name_ + "\"],";
+        config += "\"name\":\"Avion Mesh Bridge\",";
+        config += "\"manufacturer\":\"Avi-on\"";
+    } else {
+        config += "\"identifiers\":[\"" + std::string(uid) + "\"],";
+        config += "\"name\":\"" + name + "\",";
+        config += "\"manufacturer\":\"Avi-on\",";
+        if (!product_name.empty())
+            config += "\"model\":\"" + product_name + "\",";
+        config += "\"via_device\":\"" + node_name_ + "\"";
+    }
     config += "}";
 
     config += "}";

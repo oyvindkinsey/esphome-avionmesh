@@ -73,6 +73,7 @@ class AvionMeshHub : public esphome::Component,
 
  public:
     void set_passphrase(const std::string &passphrase) { passphrase_ = passphrase; }
+    void set_single_device(bool single_device) { single_device_ = single_device; }
 
     void setup() override;
     void loop() override;
@@ -87,6 +88,7 @@ class AvionMeshHub : public esphome::Component,
 
  protected:
     std::string passphrase_;  // From YAML (if provided), used to initialize db
+    bool single_device_{false};
 
     csrmesh::MeshContext mesh_ctx_{};
     bool mesh_initialized_{false};  // true when crypto is ready AND BLE is connected

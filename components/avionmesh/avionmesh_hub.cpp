@@ -62,6 +62,10 @@ void AvionMeshHub::setup() {
     if (mqtt) {
         discovery_.set_node_name(esphome::App.get_name());
         discovery_.set_topic_prefix(mqtt->get_topic_prefix());
+        discovery_.set_single_device(single_device_);
+
+        if (single_device_)
+            mesh_mqtt_exposed_ = true;
     }
 
     /* Initialize csrmesh crypto if passphrase exists */
