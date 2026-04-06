@@ -1418,11 +1418,16 @@ void AvionMeshHub::on_light_command(uint16_t avion_id, const std::string &payloa
             state.brightness = brightness;
             state.brightness_known = true;
         } else if (state_str == "ON") {
-            Command cmd;
-            cmd_brightness(avion_id, 255, cmd);
-            send_cmd(mesh_ctx_, cmd);
-            state.brightness = 255;
-            state.brightness_known = true;
+            /* Only send brightness 255 if the device is currently off.
+               HA sends "state":"ON" with color_temp changes even when
+               already on — sending 255 would override the current level. */
+            if (!state.brightness_known || state.brightness == 0) {
+                Command cmd;
+                cmd_brightness(avion_id, 255, cmd);
+                send_cmd(mesh_ctx_, cmd);
+                state.brightness = 255;
+                state.brightness_known = true;
+            }
         } else if (state_str == "OFF") {
             Command cmd;
             cmd_brightness(avion_id, 0, cmd);
