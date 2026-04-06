@@ -1569,15 +1569,27 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
     if (!state.brightness_known)
         return;
 
+    bool mqtt_exposed = false;
+    bool has_ct = true;
     auto *dev = db_.find_device(avion_id);
-    if (!dev)
-        return;
+    if (dev) {
+        mqtt_exposed = dev->mqtt_exposed;
+        has_ct = has_color_temp(dev->product_type);
+    } else {
+        auto *grp = db_.find_group(avion_id);
+        if (grp)
+            mqtt_exposed = grp->mqtt_exposed;
+        else if (avion_id == 0)
+            mqtt_exposed = mesh_mqtt_exposed_;
+        else
+            return;
+    }
 
-    if (dev->mqtt_exposed) {
+    if (mqtt_exposed) {
         discovery_.publish_on_off_state(avion_id, state.brightness > 0);
         discovery_.publish_brightness_state(avion_id, state.brightness);
 
-        if (state.color_temp_known && has_color_temp(dev->product_type)) {
+        if (state.color_temp_known && has_ct) {
             discovery_.publish_color_temp_state(avion_id, state.color_temp);
         }
     }
