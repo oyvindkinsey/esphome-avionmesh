@@ -420,8 +420,6 @@ void AvionMeshWebHandler::handle_index(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-
-
 void AvionMeshWebHandler::handle_events(AsyncWebServerRequest *request) {
     httpd_req_t *req = *request;
 

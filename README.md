@@ -45,13 +45,26 @@ Using a board with a dedicated Ethernet PHY (connected via RMII or SPI) keeps Wi
 | **Olimex ESP32-GATEWAY** | LAN8720 (RMII) | No PoE, lower cost |
 | **LilyGO T-ETH-Lite** | W5500 (SPI) | ESP32-S3 based |
 
-The minimal configuration example below uses the Olimex ESP32-POE pinout.
-
 ## Installation
 
 ### Minimal Configuration
 
-A minimal configuration for the Avi-on gateway:
+The example below uses an **Olimex ESP32-POE** pinout. You **must** adjust the
+`ethernet:` section to match your specific board — pin assignments, clock mode,
+and PHY address differ between boards. Consult the
+[ESPHome Ethernet docs](https://esphome.io/components/ethernet.html) for your
+board's settings.
+
+<details>
+<summary>Common ethernet configurations by board</summary>
+
+| Board | `phy_addr` | `clk` | `power_pin` | Notes |
+|-------|-----------|-------|-------------|-------|
+| Olimex ESP32-POE | 0 | `pin: GPIO17, mode: CLK_OUT` | GPIO12 | |
+| WT32-ETH01 | 1 | `pin: GPIO0, mode: CLK_IN` | GPIO16 | Non-PoE variant |
+| Olimex ESP32-GATEWAY | 0 | `pin: GPIO17, mode: CLK_OUT` | GPIO5 | |
+
+</details>
 
 ```yaml
 esphome:
@@ -63,47 +76,43 @@ esp32:
   framework:
     type: esp-idf
 
-# Enable logging
 logger:
 
-# Enable Home Assistant API
 api:
   encryption:
     key: !secret api_encryption_key
 
-# Enable Over-The-Air updates
 ota:
+  platform: esphome
   password: !secret ota_password
 
-# Enable WiFi or Ethernet (example shows Ethernet)
+# Ethernet — adjust pins/phy_addr for YOUR board (see table above)
 ethernet:
   type: LAN8720
   mdc_pin: GPIO23
   mdio_pin: GPIO18
-  clk_mode: GPIO17_OUT
+  clk:
+    pin: GPIO17
+    mode: CLK_OUT
   phy_addr: 0
   power_pin: GPIO12
-  use_address: "avionmesh.local"
 
-# MQTT broker (required for Home Assistant discovery)
 mqtt:
   broker: !secret mqtt_broker
   port: 1883
 
-# Enable the web server for the management UI
 web_server:
+  local: true
   version: 3
 
-# Load required external components
 external_components:
   - source: github://oyvindkinsey/esphome-avionmesh
     components: [avionmesh]
 
-# Avi-on mesh configuration
 avionmesh:
-  # Optional: Set a mesh passphrase (default: auto-generated)
-  # Must be base64-encoded, decodes to ≥16 bytes
-  # passphrase: "dfj4nNQJwZ3jw5ZlahvSWk5GeDLU71NyQrHY5vCDr+VTDNBnsTIuIssNWvTxuWQ+pTtEAs43NsBc2ovV0rLJ5A=="
+  # Optional: mesh passphrase (base64, decodes to ≥16 bytes)
+  # Use the web UI "Generate" button, or import from Avi-on cloud
+  # passphrase: !secret avionmesh_passphrase
 ```
 
 ### Initial Setup
