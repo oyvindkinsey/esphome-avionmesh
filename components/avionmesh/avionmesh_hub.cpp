@@ -787,31 +787,11 @@ void AvionMeshHub::process_deferred_actions() {
                             discovery_.publish_light(id, grp->name, true, true);
                     }
                 }
-                /* Subscribe MQTT commands */
-                {
-                    bool has_dim = true, has_ct = true;
-                    auto *dev = db_.find_device(id);
-                    if (dev) {
-                        has_dim = has_dimming(dev->product_type);
-                        has_ct = has_color_temp(dev->product_type);
-                    }
-                    do_mqtt_subscribe(discovery_.command_topic(id),
-                                      [this, id](const std::string &, const std::string &payload) {
-                                          on_switch_command(id, payload);
-                                      });
-                    if (has_dim) {
-                        do_mqtt_subscribe(discovery_.brightness_command_topic(id),
-                                          [this, id](const std::string &, const std::string &payload) {
-                                              on_brightness_command(id, payload);
-                                          });
-                    }
-                    if (has_ct) {
-                        do_mqtt_subscribe(discovery_.color_temp_command_topic(id),
-                                          [this, id](const std::string &, const std::string &payload) {
-                                              on_color_temp_command(id, payload);
-                                          });
-                    }
-                }
+                /* Subscribe MQTT command */
+                do_mqtt_subscribe(discovery_.command_topic(id),
+                                  [this, id](const std::string &, const std::string &payload) {
+                                      on_light_command(id, payload);
+                                  });
                 publish_device_state(id);
             } else {
                 discovery_.remove_light(id);
@@ -1406,64 +1386,65 @@ void AvionMeshHub::handle_factory_reset() {
     send_response(buf);
 }
 
-/* ---- Light commands from MQTT (separate topics, bare payloads) ---- */
+/* ---- Light command from MQTT (JSON schema, single topic) ---- */
 
-void AvionMeshHub::on_switch_command(uint16_t avion_id, const std::string &payload) {
-    uint8_t brightness;
-    if (payload != "ON") {
-        brightness = 0;
-    } else {
-        // Restore last known level rather than forcing full — HA pairs ON with
-        // brightness/set when adjusting a dimmer, so overwriting with 255 here
-        // would stomp the paired brightness command that arrives moments later.
-        auto it = device_states_.find(avion_id);
-        brightness = (it != device_states_.end() && it->second.brightness > 0)
-                     ? it->second.brightness : 255;
-    }
-    Command cmd;
-    cmd_brightness(avion_id, brightness, cmd);
-    do_mesh_send(cmd);
-    auto &state = device_states_[avion_id];
-    state.brightness = brightness;
-    state.brightness_known = true;
-    publish_device_state(avion_id);
-}
-
-void AvionMeshHub::on_brightness_command(uint16_t avion_id, const std::string &payload) {
-    uint8_t brightness = static_cast<uint8_t>(strtoul(payload.c_str(), nullptr, 10));
-
-    uint32_t now = esphome::millis();
-    auto it = last_brightness_ms_.find(avion_id);
-    if (it != last_brightness_ms_.end() &&
-        (now - it->second) < RAPID_DIM_THRESHOLD_MS) {
-        it->second = now;
+void AvionMeshHub::on_light_command(uint16_t avion_id, const std::string &payload) {
+    ESP_LOGD(TAG, "Light command for %u: %s", avion_id, payload.c_str());
+    esphome::json::parse_json(payload, [this, avion_id](JsonObject root) -> bool {
         auto &state = device_states_[avion_id];
-        state.brightness = brightness;
-        state.brightness_known = true;
+        std::string state_str = root["state"] | "";
+        bool has_brightness = root["brightness"].is<unsigned int>();
+        bool has_color_temp = root["color_temp"].is<unsigned int>();
+
+        if (has_brightness) {
+            uint8_t brightness = root["brightness"];
+
+            uint32_t now = esphome::millis();
+            auto it = last_brightness_ms_.find(avion_id);
+            if (it != last_brightness_ms_.end() &&
+                (now - it->second) < RAPID_DIM_THRESHOLD_MS) {
+                it->second = now;
+                state.brightness = brightness;
+                state.brightness_known = true;
+                publish_device_state(avion_id);
+                return true;
+            }
+            last_brightness_ms_[avion_id] = now;
+
+            Command cmd;
+            cmd_brightness(avion_id, brightness, cmd);
+            do_mesh_send(cmd);
+            state.brightness = brightness;
+            state.brightness_known = true;
+        } else if (state_str == "ON") {
+            if (!state.brightness_known || state.brightness == 0) {
+                Command cmd;
+                cmd_brightness(avion_id, 255, cmd);
+                do_mesh_send(cmd);
+                state.brightness = 255;
+                state.brightness_known = true;
+            }
+        } else if (state_str == "OFF") {
+            Command cmd;
+            cmd_brightness(avion_id, 0, cmd);
+            do_mesh_send(cmd);
+            state.brightness = 0;
+            state.brightness_known = true;
+        }
+
+        if (has_color_temp) {
+            uint16_t mireds = root["color_temp"];
+            uint16_t kelvin = mireds > 0 ? 1000000u / mireds : 3000;
+            Command cmd;
+            cmd_color_temp(avion_id, kelvin, cmd);
+            do_mesh_send(cmd);
+            state.color_temp = kelvin;
+            state.color_temp_known = true;
+        }
+
         publish_device_state(avion_id);
-        return;
-    }
-    last_brightness_ms_[avion_id] = now;
-
-    Command cmd;
-    cmd_brightness(avion_id, brightness, cmd);
-    do_mesh_send(cmd);
-    auto &state = device_states_[avion_id];
-    state.brightness = brightness;
-    state.brightness_known = true;
-    publish_device_state(avion_id);
-}
-
-void AvionMeshHub::on_color_temp_command(uint16_t avion_id, const std::string &payload) {
-    uint16_t mireds = static_cast<uint16_t>(strtoul(payload.c_str(), nullptr, 10));
-    uint16_t kelvin = mireds > 0 ? 1000000u / mireds : 3000;
-    Command cmd;
-    cmd_color_temp(avion_id, kelvin, cmd);
-    do_mesh_send(cmd);
-    auto &state = device_states_[avion_id];
-    state.color_temp = kelvin;
-    state.color_temp_known = true;
-    publish_device_state(avion_id);
+        return true;
+    });
 }
 
 /* ---- Helpers ---- */
@@ -1487,38 +1468,25 @@ void AvionMeshHub::publish_all_discovery() {
 }
 
 void AvionMeshHub::subscribe_all_commands() {
-    auto subscribe_light = [this](uint16_t id, bool has_brightness, bool has_ct) {
+    auto subscribe_light = [this](uint16_t id) {
         do_mqtt_subscribe(discovery_.command_topic(id),
                           [this, id](const std::string &, const std::string &payload) {
-                              on_switch_command(id, payload);
+                              on_light_command(id, payload);
                           });
-        if (has_brightness) {
-            do_mqtt_subscribe(discovery_.brightness_command_topic(id),
-                              [this, id](const std::string &, const std::string &payload) {
-                                  on_brightness_command(id, payload);
-                              });
-        }
-        if (has_ct) {
-            do_mqtt_subscribe(discovery_.color_temp_command_topic(id),
-                              [this, id](const std::string &, const std::string &payload) {
-                                  on_color_temp_command(id, payload);
-                              });
-        }
     };
 
     for (auto &dev : db_.devices()) {
         if (!dev.mqtt_exposed)
             continue;
-        subscribe_light(dev.avion_id, has_dimming(dev.product_type),
-                        has_color_temp(dev.product_type));
+        subscribe_light(dev.avion_id);
     }
     for (auto &grp : db_.groups()) {
         if (!grp.mqtt_exposed)
             continue;
-        subscribe_light(grp.group_id, true, true);
+        subscribe_light(grp.group_id);
     }
     if (mesh_mqtt_exposed_)
-        subscribe_light(0, true, true);
+        subscribe_light(0);
 
     mqtt_subscribed_ = true;
     ESP_LOGI(TAG, "MQTT subscriptions active");
@@ -1595,11 +1563,8 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
     }
 
     if (mqtt_exposed) {
-        discovery_.publish_on_off_state(avion_id, state.brightness > 0);
-        discovery_.publish_brightness_state(avion_id, state.brightness);
-
-        if (state.color_temp_known && supports_ct)
-            discovery_.publish_color_temp_state(avion_id, state.color_temp);
+        discovery_.publish_state(avion_id, state.brightness > 0, state.brightness,
+                                 supports_ct, state.color_temp_known, state.color_temp);
     }
 
     {

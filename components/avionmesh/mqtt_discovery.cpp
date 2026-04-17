@@ -20,34 +20,6 @@ std::string MqttDiscovery::command_topic(uint16_t avion_id) const {
     return buf;
 }
 
-std::string MqttDiscovery::brightness_state_topic(uint16_t avion_id) const {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%s/light/%u/brightness/state",
-             topic_prefix_.c_str(), avion_id);
-    return buf;
-}
-
-std::string MqttDiscovery::brightness_command_topic(uint16_t avion_id) const {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%s/light/%u/brightness/set",
-             topic_prefix_.c_str(), avion_id);
-    return buf;
-}
-
-std::string MqttDiscovery::color_temp_state_topic(uint16_t avion_id) const {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%s/light/%u/color_temp/state",
-             topic_prefix_.c_str(), avion_id);
-    return buf;
-}
-
-std::string MqttDiscovery::color_temp_command_topic(uint16_t avion_id) const {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%s/light/%u/color_temp/set",
-             topic_prefix_.c_str(), avion_id);
-    return buf;
-}
-
 std::string MqttDiscovery::discovery_topic(uint16_t avion_id) const {
     char buf[128];
     snprintf(buf, sizeof(buf), "homeassistant/light/%s_%u/config",
@@ -90,20 +62,18 @@ void MqttDiscovery::publish_light(uint16_t avion_id, const std::string &name,
     std::string config = "{";
     config += "\"name\":\"" + name + "\",";
     config += "\"unique_id\":\"" + std::string(uid) + "\",";
+    config += "\"schema\":\"json\",";
     config += "\"command_topic\":\"" + command_topic(avion_id) + "\",";
     config += "\"state_topic\":\"" + state_topic(avion_id) + "\",";
 
     if (has_brightness) {
-        config += "\"brightness_command_topic\":\"" + brightness_command_topic(avion_id) + "\",";
-        config += "\"brightness_state_topic\":\"" + brightness_state_topic(avion_id) + "\",";
+        config += "\"brightness\":true,";
         config += "\"brightness_scale\":255,";
     }
     if (has_color_temp) {
         config += "\"supported_color_modes\":[\"color_temp\"],";
         config += "\"min_mireds\":200,";
         config += "\"max_mireds\":370,";
-        config += "\"color_temp_command_topic\":\"" + color_temp_command_topic(avion_id) + "\",";
-        config += "\"color_temp_state_topic\":\"" + color_temp_state_topic(avion_id) + "\",";
     } else if (has_brightness) {
         config += "\"supported_color_modes\":[\"brightness\"],";
     }
@@ -126,21 +96,21 @@ void MqttDiscovery::remove_light(uint16_t avion_id) {
     publish_(discovery_topic(avion_id), "", true);
 }
 
-void MqttDiscovery::publish_on_off_state(uint16_t avion_id, bool on) {
-    publish_(state_topic(avion_id), on ? "ON" : "OFF", true);
-}
-
-void MqttDiscovery::publish_brightness_state(uint16_t avion_id, uint8_t brightness) {
-    char payload[8];
-    snprintf(payload, sizeof(payload), "%u", brightness);
-    publish_(brightness_state_topic(avion_id), payload, true);
-}
-
-void MqttDiscovery::publish_color_temp_state(uint16_t avion_id, uint16_t kelvin) {
-    char payload[8];
-    uint16_t mireds = kelvin > 0 ? 1000000u / kelvin : 0;
-    snprintf(payload, sizeof(payload), "%u", mireds);
-    publish_(color_temp_state_topic(avion_id), payload, true);
+void MqttDiscovery::publish_state(uint16_t avion_id, bool on, uint8_t brightness,
+                                   bool has_color_temp, bool color_temp_known,
+                                   uint16_t color_temp_kelvin) {
+    char buf[128];
+    if (has_color_temp && color_temp_known) {
+        uint16_t mireds = color_temp_kelvin > 0 ? 1000000u / color_temp_kelvin : 0;
+        snprintf(buf, sizeof(buf),
+                 "{\"state\":\"%s\",\"brightness\":%u,\"color_mode\":\"color_temp\",\"color_temp\":%u}",
+                 on ? "ON" : "OFF", brightness, mireds);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "{\"state\":\"%s\",\"brightness\":%u}",
+                 on ? "ON" : "OFF", brightness);
+    }
+    publish_(state_topic(avion_id), buf, true);
 }
 
 }  // namespace avionmesh

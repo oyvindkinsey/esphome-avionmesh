@@ -86,12 +86,12 @@ TEST_F(GroupLatchTest, ConvergedBrightness_MqttExposed_PublishesMqtt) {
     bool found_brightness = false;
     for (auto &[topic, payload, retain] : hub.mqtt_publishes) {
         if (topic.find(std::to_string(GROUP_1)) != std::string::npos &&
-            topic.find("brightness/state") != std::string::npos) {
+            topic.find("/state") != std::string::npos &&
+            payload.find("\"brightness\":150") != std::string::npos) {
             found_brightness = true;
-            EXPECT_EQ(payload, "150");
         }
     }
-    EXPECT_TRUE(found_brightness) << "expected brightness/state MQTT publish for group";
+    EXPECT_TRUE(found_brightness) << "expected JSON state MQTT publish for group with brightness 150";
 }
 
 // Each single-group update latches; after a second group command the group

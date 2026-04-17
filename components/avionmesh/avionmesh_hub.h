@@ -208,9 +208,7 @@ class AvionMeshHub : public esphome::Component,
     void handle_set_passphrase(const std::string &passphrase);
     void handle_generate_passphrase();
     void handle_factory_reset();
-    void on_switch_command(uint16_t avion_id, const std::string &payload);
-    void on_brightness_command(uint16_t avion_id, const std::string &payload);
-    void on_color_temp_command(uint16_t avion_id, const std::string &payload);
+    void on_light_command(uint16_t avion_id, const std::string &payload);
 
     /* Crypto initialization - returns true if successful */
     bool init_crypto();

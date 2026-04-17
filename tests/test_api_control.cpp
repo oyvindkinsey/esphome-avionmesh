@@ -45,7 +45,8 @@ TEST_F(ApiControlTest, ControlBrightness_EchoesStateToMqtt) {
 
     bool found = false;
     for (auto &[topic, payload, retain] : hub.mqtt_publishes)
-        if (topic.find("brightness/state") != std::string::npos && payload == "180")
+        if (topic.find("/state") != std::string::npos &&
+            payload.find("\"brightness\":180") != std::string::npos)
             found = true;
     EXPECT_TRUE(found);
 }
