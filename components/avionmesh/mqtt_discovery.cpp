@@ -87,9 +87,20 @@ void MqttDiscovery::publish_light(uint16_t avion_id, const std::string &name,
     char uid[64];
     snprintf(uid, sizeof(uid), "%s_%u", node_name_.c_str(), avion_id);
 
+    std::string object_id;
+    for (char c : name) {
+        if (c == ' ')
+            object_id += '_';
+        else if (c >= 'A' && c <= 'Z')
+            object_id += static_cast<char>(c + 32);
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')
+            object_id += c;
+    }
+
     std::string config = "{";
     config += "\"name\":\"" + name + "\",";
     config += "\"unique_id\":\"" + std::string(uid) + "\",";
+    config += "\"object_id\":\"" + object_id + "\",";
     config += "\"command_topic\":\"" + command_topic(avion_id) + "\",";
     config += "\"state_topic\":\"" + state_topic(avion_id) + "\",";
 
