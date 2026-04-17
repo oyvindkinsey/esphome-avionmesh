@@ -88,25 +88,6 @@ namespace esp32_ble {
 
 struct BLEScanResult;
 
-class GAPEventHandler {
-public:
-    virtual void gap_event_handler(esp_gap_ble_cb_event_t, esp_ble_gap_cb_param_t *) = 0;
-    virtual ~GAPEventHandler() = default;
-};
-
-class GAPScanEventHandler {
-public:
-    virtual void gap_scan_event_handler(const BLEScanResult &) = 0;
-    virtual ~GAPScanEventHandler() = default;
-};
-
-class GATTcEventHandler {
-public:
-    virtual void gattc_event_handler(esp_gattc_cb_event_t, esp_gatt_if_t,
-                                     esp_ble_gattc_cb_param_t *) = 0;
-    virtual ~GATTcEventHandler() = default;
-};
-
 struct BLEGlobal {
     bool is_active() { return false; }
 };

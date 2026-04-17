@@ -66,10 +66,7 @@ enum class BleState : uint8_t {
     Disconnected,
 };
 
-class AvionMeshHub : public esphome::Component,
-                     public esphome::esp32_ble::GAPEventHandler,
-                     public esphome::esp32_ble::GAPScanEventHandler,
-                     public esphome::esp32_ble::GATTcEventHandler {
+class AvionMeshHub : public esphome::Component {
     friend class AvionMeshWebHandler;
 
  public:
@@ -80,11 +77,11 @@ class AvionMeshHub : public esphome::Component,
     void dump_config() override;
     float get_setup_priority() const override;
 
-    /* esp32_ble event handler interfaces */
-    void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) override;
-    void gap_scan_event_handler(const esphome::esp32_ble::BLEScanResult &result) override;
+    /* esp32_ble event handlers (callback-based since ESPHome 2026.4.0) */
+    void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+    void gap_scan_event_handler(const esphome::esp32_ble::BLEScanResult &result);
     void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
-                              esp_ble_gattc_cb_param_t *param) override;
+                              esp_ble_gattc_cb_param_t *param);
 
  protected:
     std::string passphrase_;  // From YAML (if provided), used to initialize db

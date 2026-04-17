@@ -51,16 +51,10 @@ def validate_passphrase(value):
     return value
 
 
-esp32_ble_ns = cg.esphome_ns.namespace("esp32_ble")
-GAPScanEventHandler = esp32_ble_ns.class_("GAPScanEventHandler")
-
 avionmesh_ns = cg.esphome_ns.namespace("avionmesh")
 AvionMeshHub = avionmesh_ns.class_(
     "AvionMeshHub",
     cg.Component,
-    esp32_ble.GAPEventHandler,
-    GAPScanEventHandler,
-    esp32_ble.GATTcEventHandler,
 )
 
 CONFIG_SCHEMA = cv.Schema(
@@ -103,11 +97,8 @@ async def to_code(config):
     # Gzip web assets → C headers
     comp_dir = os.path.dirname(__file__)
 
-    def _embed_asset(src_name, header_name, symbol):
-        src = os.path.join(comp_dir, src_name)
+    def _embed_asset_bytes(raw, header_name, symbol):
         hdr = os.path.join(comp_dir, header_name)
-        with open(src, "rb") as f:
-            raw = f.read()
         compressed = gzip.compress(raw, compresslevel=9)
         hex_lines = []
         for i in range(0, len(compressed), 16):
@@ -117,12 +108,19 @@ async def to_code(config):
             f.write("#pragma once\n")
             f.write("#include <cstdint>\n")
             f.write("#include <cstddef>\n\n")
-            f.write(f"// Auto-generated from {src_name} — do not edit\n")
+            f.write("// Auto-generated — do not edit\n")
             f.write(f"static const uint8_t {symbol}[] = {{\n")
             f.write(",\n".join(f"    {line}" for line in hex_lines))
             f.write("\n};\n\n")
             f.write(f"static const size_t {symbol}_SIZE = {len(compressed)};\n")
 
-    _embed_asset("web.html", "web_content.h", "AVIONMESH_WEB_HTML")
-    _embed_asset("web.css",  "web_style.h",   "AVIONMESH_WEB_STYLE")
-    _embed_asset("web.js",   "web_script.h",  "AVIONMESH_WEB_SCRIPT")
+    # Inline CSS + JS into HTML so the UI loads in a single request
+    with open(os.path.join(comp_dir, "web.html"), "r") as f:
+        html = f.read()
+    with open(os.path.join(comp_dir, "web.css"), "r") as f:
+        css = f.read()
+    with open(os.path.join(comp_dir, "web.js"), "r") as f:
+        js = f.read()
+    html = html.replace('<link rel="stylesheet" href="/ui.css">', f"<style>{css}</style>")
+    html = html.replace('<script src="/ui.js"></script>', f"<script>{js}</script>")
+    _embed_asset_bytes(html.encode("utf-8"), "web_content.h", "AVIONMESH_WEB_HTML")
