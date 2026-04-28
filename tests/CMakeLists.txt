@@ -17,7 +17,7 @@ FetchContent_MakeAvailable(googletest)
 # ---- Sources ----
 set(COMPONENT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../components/avionmesh)
 set(AVIONMESH_LIB /home/oyvind/avionmesh-cpp)
-set(ARDUINOJSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../.esphome/build/avionmesh/.piolibdeps/avionmesh/ArduinoJson/src)
+set(ARDUINOJSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../.esphome/build/avionmesh/managed_components/bblanchon__arduinojson/src)
 
 set(SOURCES
     ${COMPONENT_DIR}/avionmesh_hub.cpp
