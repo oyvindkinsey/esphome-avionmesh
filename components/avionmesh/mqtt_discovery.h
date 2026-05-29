@@ -10,6 +10,7 @@ class MqttDiscovery {
  public:
     void set_node_name(const std::string &name) { node_name_ = name; }
     void set_topic_prefix(const std::string &prefix) { topic_prefix_ = prefix; }
+    void set_single_device(bool single_device) { single_device_ = single_device; }
     void set_publish_fn(std::function<void(const std::string &, const std::string &, bool)> fn) {
         publish_fn_ = std::move(fn);
     }
@@ -37,6 +38,7 @@ class MqttDiscovery {
  protected:
     std::string node_name_;
     std::string topic_prefix_;
+    bool single_device_{false};
     std::function<void(const std::string &, const std::string &, bool)> publish_fn_;
 
     void publish_(const std::string &topic, const std::string &payload, bool retain = false);
