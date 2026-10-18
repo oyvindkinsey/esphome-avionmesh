@@ -9,7 +9,7 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install clang-format
         run: sudo apt-get update && sudo apt-get install -y clang-format
       - name: Check C++ formatting
@@ -21,11 +21,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: esphome-avionmesh
       - name: Check out avionmesh-cpp (test dependency)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: oyvindkinsey/avionmesh-cpp
           path: avionmesh-cpp
@@ -39,7 +39,7 @@ jobs:
   esphome-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
