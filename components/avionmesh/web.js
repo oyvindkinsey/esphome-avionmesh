@@ -342,7 +342,7 @@ function connectSSE() {
 
   evtSource.addEventListener('claim_result', e => {
     const d = JSON.parse(e.data);
-    feedLog('Claim: ' + (d.status === 'ok' ? 'ID ' + d.device_id : d.message || 'failed'));
+    feedLog('Claim: ' + (d.status === 'ok' ? 'ID ' + d.device_id : d.status === 'started' ? 'started for ID ' + d.device_id : d.message || 'failed'));
     if (d.status === 'ok' && claimingHash) {
       const idx = unassocHashes.indexOf(claimingHash);
       if (idx >= 0) {

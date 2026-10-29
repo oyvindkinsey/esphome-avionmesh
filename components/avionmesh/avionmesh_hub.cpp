@@ -507,19 +507,27 @@ void AvionMeshHub::loop() {
 
     if (associating_) {
         if (csrmesh::protocol::is_complete(proto_ctx_)) {
-            ESP_LOGI(TAG, "Association complete for device %u", proto_ctx_.device_id);
+            uint16_t claimed_id = proto_ctx_.device_id;
+            ESP_LOGI(TAG, "Association complete for device %u", claimed_id);
             associating_ = false;
             csrmesh::protocol::cleanup(proto_ctx_);
             send_response("{\"action\":\"claim_device\",\"status\":\"ok\"}");
+            char buf[128];
+            snprintf(buf, sizeof(buf), "{\"status\":\"ok\",\"device_id\":%u}", claimed_id);
+            do_sse_emit("claim_result", buf);
         } else if (csrmesh::protocol::is_error(proto_ctx_)) {
             ESP_LOGE(TAG, "Association failed: %s", proto_ctx_.error);
+            const char *errmsg = proto_ctx_.error ? proto_ctx_.error : "unknown";
             associating_ = false;
             csrmesh::protocol::cleanup(proto_ctx_);
             char buf[128];
             snprintf(buf, sizeof(buf),
                      "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"%s\"}",
-                     proto_ctx_.error ? proto_ctx_.error : "unknown");
+                     errmsg);
             send_response(buf);
+            char sse[160];
+            snprintf(sse, sizeof(sse), "{\"status\":\"error\",\"message\":\"%s\"}", errmsg);
+            do_sse_emit("claim_result", sse);
         } else if (esphome::millis() - association_start_ms_ > ASSOCIATION_TIMEOUT_MS) {
             ESP_LOGE(TAG, "Association timed out (state=%s)",
                      csrmesh::protocol::state_name(proto_ctx_.state));
@@ -527,6 +535,7 @@ void AvionMeshHub::loop() {
             csrmesh::associate_cancel(mesh_ctx_);
             send_response(
                 "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"timeout\"}");
+            do_sse_emit("claim_result", "{\"status\":\"error\",\"message\":\"timeout\"}");
         }
     }
 }
@@ -1063,7 +1072,9 @@ void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
     ESP_LOGI(TAG, "Claiming device: uuid_hash=0x%08x, device_id=%u, name=%s", uuid_hash, device_id,
              name.c_str());
 
-    auto err = csrmesh::protocol::init(proto_ctx_, uuid_hash, device_id, passphrase_.c_str());
+    // Association must use the runtime key (import/generate/NVS), not the
+    // optional YAML bootstrap value — see #23.
+    auto err = csrmesh::protocol::init(proto_ctx_, uuid_hash, device_id, db_.passphrase().c_str());
     if (err != csrmesh::Error::Ok) {
         ESP_LOGE(TAG, "Proto init failed: %d", static_cast<int>(err));
         send_response(
@@ -1082,6 +1093,12 @@ void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
 
     associating_ = true;
     association_start_ms_ = esphome::millis();
+
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"status\":\"started\",\"device_id\":%u}", device_id);
+        do_sse_emit("claim_result", buf);
+    }
 
     db_.add_device(device_id, product_type, name);
 }
@@ -1132,12 +1149,11 @@ void AvionMeshHub::handle_claim_device_auto() {
         }
 
         ESP_LOGI(TAG, "Auto-claim assigning device ID %u", device_id);
+        // handle_claim_device() emits the "started" announcement itself; the
+        // final ok/error (with device_id) comes from the association terminal
+        // states in loop().
         handle_claim_device(pending_claim_uuid_hash_, device_id, pending_claim_name_,
                             pending_claim_product_type_);
-
-        char buf[128];
-        snprintf(buf, sizeof(buf), "{\"status\":\"ok\",\"device_id\":%u}", device_id);
-        do_sse_emit("claim_result", buf);
     });
 }
 
