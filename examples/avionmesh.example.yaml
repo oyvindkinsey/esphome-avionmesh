@@ -54,3 +54,6 @@ mqtt:
 
 avionmesh:
   passphrase: !secret avionmesh_passphrase
+  # Share one MQTT device ("Avion Mesh Bridge") for all lights instead of
+  # one device per light — quieter in Home Assistant on larger meshes.
+  single_device: true
