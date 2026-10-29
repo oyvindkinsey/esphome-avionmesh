@@ -361,7 +361,9 @@ function connectSSE() {
     if (res) {
       res.innerHTML = d.error
         ? `<span style="color:var(--err)">${esc(d.error)}</span>`
-        : `FW ${d.fw} · Vendor ${d.vendor_id} · CSR ${d.csr_product_id} · Flags ${d.flags}`;
+        : d.short
+          ? `Short ping reply (controller-style, no FW info) · raw ${esc(d.raw)}`
+          : `FW ${d.fw} · Vendor ${d.vendor_id} · CSR ${d.csr_product_id} · Flags ${d.flags}`;
       setTimeout(() => res.textContent = '', 15000);
     }
     feedLog('Examine #' + d.avion_id + ': ' + (d.error || 'ok'));

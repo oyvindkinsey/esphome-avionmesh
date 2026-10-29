@@ -868,7 +868,7 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
     uint16_t src = (mcp_source == 0x8000) ? crypto_source : mcp_source;
     ESP_LOGD(TAG, "RX #%u: src=%u opcode=0x%02X len=%zu", rx_count_, src, opcode, payload_len);
 
-    if ((discovering_mesh_ || examining_) && opcode == MODEL_OPCODE && payload_len >= 10 &&
+    if ((discovering_mesh_ || examining_) && opcode == MODEL_OPCODE && payload_len >= 4 &&
         payload[0] == static_cast<uint8_t>(Verb::Ping)) {
         uint16_t device_id = (mcp_source == 0x8000) ? crypto_source : mcp_source;
 
@@ -879,12 +879,24 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
         if (examining_ && device_id == examine_target_) {
             examining_ = false;
 
+            // Controllers (e.g. Smart Dimmers) answer pings with a short
+            // payload that carries no firmware/vendor fields; report the raw
+            // bytes instead of timing out.
             char buf[256];
-            snprintf(buf, sizeof(buf),
-                     "{\"avion_id\":%u,\"fw\":\"%u.%u.%u\","
-                     "\"flags\":%u,\"vendor_id\":%u,\"csr_product_id\":%u}",
-                     device_id, payload[3], payload[4], payload[5], payload[6],
-                     (payload[7] << 8) | payload[8], payload[9]);
+            if (payload_len >= 10) {
+                snprintf(buf, sizeof(buf),
+                         "{\"avion_id\":%u,\"fw\":\"%u.%u.%u\","
+                         "\"flags\":%u,\"vendor_id\":%u,\"csr_product_id\":%u}",
+                         device_id, payload[3], payload[4], payload[5], payload[6],
+                         (payload[7] << 8) | payload[8], payload[9]);
+            } else {
+                char hex[128];
+                size_t hex_len = 0;
+                for (size_t i = 0; i < payload_len && hex_len + 2 < sizeof(hex); i++)
+                    hex_len += snprintf(hex + hex_len, sizeof(hex) - hex_len, "%02X", payload[i]);
+                snprintf(buf, sizeof(buf), "{\"avion_id\":%u,\"short\":true,\"raw\":\"%s\"}",
+                         device_id, hex);
+            }
 
             do_sse_emit("examine", buf);
 
