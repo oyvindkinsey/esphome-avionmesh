@@ -885,6 +885,9 @@ void AvionMeshHub::process_deferred_actions() {
                     keypad_setup_attempted_.erase(id);
                     keypad_setup_status_[id] = "pending";
                 }
+                if (setup_device && previous != exposed &&
+                    supports_absolute_dimmer_direction(setup_device->product_type))
+                    controller_dimmer_levels_.erase(id);
                 if (auto *dev = db_.find_device(id); dev && dev->ha_local_level) {
                     controller_local_levels_.erase(id);
                     if (exposed && mesh_initialized_)

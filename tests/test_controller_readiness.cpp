@@ -10,6 +10,11 @@ class ReadinessHub : public TestHub {
     using AvionMeshHub::report_claim_result;
     using AvionMeshHub::set_local_dimmer_mode;
     void baseline(uint16_t id) { controller_local_levels_[id].observe(1, 0, 1000, true); }
+    // Exercise the same per-source direction tracker used by native dimmer RX.
+    AbsoluteDimmerDirection::Change native_level(uint16_t id, uint32_t sequence, uint8_t level,
+                                                 uint32_t received_ms) {
+        return controller_dimmer_levels_[id].observe(756, sequence, level, received_ms);
+    }
     void connection(bool mqtt_connected, bool mesh_ready) {
         mesh_initialized_ = mesh_ready;
         update_controller_input_readiness(mqtt_connected);
@@ -180,4 +185,43 @@ TEST(ControllerReadiness, MqttReconnectPublishesBaselineOfflineBeforeSharedRecov
     EXPECT_EQ(input_availability(hub), "online");
     EXPECT_TRUE(hub.report(33001, 3, 255, 2100).accepted);
     EXPECT_TRUE(hub.mesh_sends.empty());
+}
+
+TEST(ControllerReadiness, NativeExposureToggleDiscardsDirectionFromBeforeDisable) {
+    for (uint8_t product : {81, 91}) {
+        ReadinessHub hub;
+        ASSERT_TRUE(hub.db().add_device(33001, product, "Native dimmer"));
+        ASSERT_TRUE(hub.db().add_device(33002, product, "Other native dimmer"));
+        hub.test_setup();
+        EXPECT_FALSE(hub.native_level(33001, 100, 100, 1000).action);
+        const auto before = hub.native_level(33001, 101, 90, 1100);
+        ASSERT_TRUE(before.accepted);
+        ASSERT_STREQ(before.action, "lower");
+        hub.native_level(33002, 100, 150, 1000);
+
+        // Use the actual deferred management path, including persistence and
+        // discovery. The short gap would otherwise retain the old direction.
+        DeferredAction toggle;
+        toggle.type = DeferredAction::SetMqttExposed;
+        toggle.id1 = 33001;
+        toggle.id2 = 0;
+        hub.push_action(toggle);
+        ASSERT_FALSE(hub.db().find_device(33001)->mqtt_exposed);
+        toggle.id2 = 1;
+        hub.push_action(toggle);
+        ASSERT_TRUE(hub.db().find_device(33001)->mqtt_exposed);
+
+        const auto first = hub.native_level(33001, 102, 110, 1200);
+        EXPECT_TRUE(first.accepted);  // Brightness is still usable immediately.
+        EXPECT_FALSE(first.action);   // No Raise inferred from the pre-disable 90.
+        EXPECT_EQ(first.difference, 0);
+        const auto next = hub.native_level(33001, 103, 120, 1300);
+        EXPECT_TRUE(next.accepted);
+        EXPECT_STREQ(next.action, "raise");
+        EXPECT_EQ(next.previous, 110);
+        EXPECT_EQ(next.difference, 10);
+        const auto other = hub.native_level(33002, 101, 140, 1200);
+        EXPECT_STREQ(other.action, "lower");  // Unrelated controller history survives.
+        EXPECT_TRUE(hub.mesh_sends.empty());  // Exposure changes never program native controls.
+    }
 }
