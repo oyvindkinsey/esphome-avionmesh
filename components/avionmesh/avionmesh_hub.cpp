@@ -1212,6 +1212,60 @@ void AvionMeshHub::set_local_dimmer_mode(uint16_t target, bool enabled) {
         read_all_dimming();  // Baseline only, no light writes.
 }
 
+void AvionMeshHub::update_controller_input_readiness(bool connected) {
+    const bool path_ready = connected && mesh_initialized_;
+    if (!path_ready) {
+        // Publish only on path loss (or when a retained baseline must be reset),
+        // not on every disconnected loop. MQTT reconnect discovery below sends
+        // the empty-baseline availability before the shared path goes online.
+        const bool reset_inputs = controller_input_path_ready_ || !controller_local_levels_.empty();
+        controller_dimmer_levels_.clear();
+        controller_local_levels_.clear();
+        local_baseline_probe_attempts_ = 0;
+        local_baseline_probe_ms_ = 0;
+        zero_dimming_query_seen_ = false;
+        if (reset_inputs) {
+            for (const auto &dev : db_.devices()) {
+                if (!dev.mqtt_exposed ||
+                    !uses_local_dimmer_reports(dev.product_type, dev.ha_local_level))
+                    continue;
+                if (connected)
+                    do_mqtt_publish(discovery_.controller_input_availability_topic(dev.avion_id),
+                                    "offline", true);
+                do_sse_emit("controller_input_status",
+                            "{\"controller_id\":" + std::to_string(dev.avion_id) +
+                                ",\"status\":\"waiting_for_baseline\"}");
+            }
+        }
+    }
+    controller_input_path_ready_ = path_ready;
+    if (!connected)
+        controller_availability_known_ = false;
+    if (connected && !controller_mqtt_was_connected_) {
+        controller_mqtt_since_ms_ = esphome::millis();
+        publish_all_discovery();
+    }
+    controller_mqtt_was_connected_ = connected;
+}
+
+AbsoluteDimmerDirection::Change AvionMeshHub::observe_controller_local_report(
+    uint16_t source, uint32_t sequence, uint8_t level, uint32_t received_ms, bool query_reply) {
+    const auto *dev = db_.find_device(source);
+    if (!dev || !dev->mqtt_exposed || !controller_input_path_ready_ ||
+        !uses_local_dimmer_reports(dev->product_type, dev->ha_local_level))
+        return {};
+    auto &reports = controller_local_levels_[source];
+    const bool previously_ready = reports.ready();
+    const auto change = reports.observe(sequence, level, received_ms, query_reply);
+    if (!previously_ready && reports.ready()) {
+        publish_controller_actions(source);
+        do_sse_emit("controller_input_status",
+                    "{\"controller_id\":" + std::to_string(source) +
+                        ",\"status\":\"ready_local_reports\"}");
+    }
+    return change;
+}
+
 void AvionMeshHub::process_controller_events() {
 #ifdef USE_ESP32
     if (controller_bindings_.bind_mesh(db_.passphrase())) {
@@ -1225,20 +1279,7 @@ void AvionMeshHub::process_controller_events() {
     }
     auto *mqtt = esphome::mqtt::global_mqtt_client;
     bool connected = mqtt && mqtt->is_connected();
-    if (!connected || !mesh_initialized_) {
-        controller_dimmer_levels_.clear();
-        controller_local_levels_.clear();
-        local_baseline_probe_attempts_ = 0;
-        local_baseline_probe_ms_ = 0;
-        zero_dimming_query_seen_ = false;
-    }
-    if (!connected)
-        controller_availability_known_ = false;
-    if (connected && !controller_mqtt_was_connected_) {
-        controller_mqtt_since_ms_ = esphome::millis();
-        publish_all_discovery();
-    }
-    controller_mqtt_was_connected_ = connected;
+    update_controller_input_readiness(connected);
     if (connected &&
         (!controller_availability_known_ || controller_available_ != mesh_initialized_)) {
         if (mqtt->publish(discovery_.controller_availability_topic(),
@@ -1383,17 +1424,10 @@ void AvionMeshHub::process_controller_events() {
         }
         AbsoluteDimmerDirection::Change local_change;
         if (local_report) {
-            const bool previously_ready = controller_local_levels_[dev->avion_id].ready();
-            local_change = controller_local_levels_[dev->avion_id].observe(
-                decrypted.seq, command.brightness, packet.received_ms,
+            local_change = observe_controller_local_report(
+                dev->avion_id, decrypted.seq, command.brightness, packet.received_ms,
                 local_dimmer_report_is_query(command.transaction, zero_dimming_query_seen_,
                                              zero_dimming_query_ms_, packet.received_ms));
-            if (!previously_ready && controller_local_levels_[dev->avion_id].ready()) {
-                publish_controller_actions(dev->avion_id);
-                do_sse_emit("controller_input_status",
-                            "{\"controller_id\":" + std::to_string(dev->avion_id) +
-                                ",\"status\":\"ready_local_reports\"}");
-            }
             if (!local_change.accepted)
                 continue;  // Initial/query/reordered reports.
         }

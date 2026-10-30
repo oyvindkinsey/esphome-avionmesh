@@ -25,8 +25,12 @@ existing mode. Neither exposure nor mode selection programs native assignments.
 The Office product-81 slider's existing managed empty target 757 remains untouched.
 No four-slot keypad format is reused for either dimmer.
 
-Local-report readiness resets when the mesh/MQTT path reconnects or the mode
-changes. Until a tagged read response arrives, the first physical action may be
+Local-report readiness is revoked when the mesh/MQTT path is lost or the mode
+changes. On loss, the GUI receives `waiting_for_baseline` once; with MQTT still
+connected, per-input availability is retained offline immediately. MQTT reconnect
+discovery publishes this offline baseline state before shared controller
+availability can return online. BLE recovery alone cannot restore readiness.
+Repeated disconnected loops do not repeat the notification/publication. Until a tagged read response arrives, the first physical action may be
 consumed as a silent baseline. It cannot safely be identified as an action from
 its bytes alone. Once ready, ordered zero-tag reports can repeat at unchanged
 endpoints; tagged queries, duplicates and reordered packets do not emit inputs.

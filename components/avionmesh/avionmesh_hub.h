@@ -252,9 +252,13 @@ class AvionMeshHub : public esphome::Component {
     uint32_t controller_events_expired_{0}, controller_events_offline_{0};
     uint32_t controller_events_failed_{0};
     bool controller_mqtt_was_connected_{false};
+    bool controller_input_path_ready_{false};
     bool controller_availability_known_{false}, controller_available_{false};
     uint32_t controller_mqtt_since_ms_{0}, controller_mesh_since_ms_{0};
     void process_controller_events();
+    void update_controller_input_readiness(bool mqtt_connected);
+    AbsoluteDimmerDirection::Change observe_controller_local_report(
+        uint16_t source, uint32_t sequence, uint8_t level, uint32_t received_ms, bool query_reply);
     void set_local_dimmer_mode(uint16_t target, bool enabled);
     std::string controller_input_status(uint16_t target) const;
     std::string controller_bindings_json(uint16_t target);
