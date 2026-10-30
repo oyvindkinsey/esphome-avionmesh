@@ -34,6 +34,8 @@ class DeviceDB {
 
     bool add_group(uint16_t group_id, const std::string &name);
     bool remove_group(uint16_t group_id);
+    bool rename_device(uint16_t avion_id, const std::string &name);
+    bool rename_group(uint16_t group_id, const std::string &name);
     GroupEntry *find_group(uint16_t group_id);
     const std::vector<GroupEntry> &groups() const { return groups_; }
 

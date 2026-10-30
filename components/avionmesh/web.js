@@ -91,7 +91,7 @@ function deviceCard(d) {
   return `<div class="card" data-avid="${d.avion_id}">
   <div class="card-header">
     <div>
-      <div class="card-name">${esc(d.name)}</div>
+      <div class="card-name">${esc(d.name)} <a href="#" class="rename-link" onclick="renameDev(${d.avion_id});return false" title="Rename">✎</a></div>
       <div class="card-sub">${esc(d.product_name)} · #${d.avion_id}</div>
     </div>
     <span id="stPill${d.avion_id}" class="state-pill ${stateClass}">${stateText}</span>
@@ -184,7 +184,7 @@ function groupCard(g) {
 
   return `<div class="card">
   <div>
-    <div class="card-name">${esc(g.name)}</div>
+    <div class="card-name">${esc(g.name)} <a href="#" class="rename-link" onclick="renameGrp(${g.group_id});return false" title="Rename">✎</a></div>
     <div class="card-sub">Group · #${g.group_id}</div>
   </div>
   <div class="on-off">
@@ -291,6 +291,14 @@ function connectSSE() {
     feedLog('Device added: ' + d.name);
   });
 
+  evtSource.addEventListener('device_updated', e => {
+    const d = JSON.parse(e.data);
+    const i = devices.findIndex(x => x.avion_id === d.avion_id);
+    if (i >= 0) devices[i].name = d.name;
+    renderDevices();
+    feedLog('Device renamed: ' + d.name);
+  });
+
   evtSource.addEventListener('device_removed', e => {
     const d = JSON.parse(e.data);
     devices = devices.filter(x => x.avion_id !== d.avion_id);
@@ -320,8 +328,16 @@ function connectSSE() {
   evtSource.addEventListener('group_updated', e => {
     const d = JSON.parse(e.data);
     const i = groups.findIndex(x => x.group_id === d.group_id);
-    if (i >= 0) groups[i] = d; else groups.push(d);
+    if (i >= 0) {
+      // Rename payloads carry only group_id + name — merge, don't replace.
+      if (d.name !== undefined) groups[i].name = d.name;
+      if (d.members !== undefined) groups[i].members = d.members;
+      if (d.mqtt_exposed !== undefined) groups[i].mqtt_exposed = d.mqtt_exposed;
+    } else if (d.members !== undefined) {
+      groups.push(d);
+    }
     renderGroups();
+    if (d.name !== undefined) feedLog('Group renamed: ' + d.name);
   });
 
   evtSource.addEventListener('discover_mesh', e => {
@@ -437,6 +453,22 @@ async function examDev(id) {
     btn.disabled = false;
     res.textContent = 'Error: ' + e.message;
   }
+}
+
+async function renameDev(id) {
+  const dev = devices.find(x => x.avion_id === id);
+  const name = prompt('New name for device #' + id + ':', dev ? dev.name : '');
+  if (name === null) return;
+  if (!name.trim()) { alert('Name cannot be empty'); return; }
+  await postJson('rename_device', {avion_id: id, name: name.trim()});
+}
+
+async function renameGrp(gid) {
+  const grp = groups.find(x => x.group_id === gid);
+  const name = prompt('New name for group #' + gid + ':', grp ? grp.name : '');
+  if (name === null) return;
+  if (!name.trim()) { alert('Name cannot be empty'); return; }
+  await postJson('rename_group', {group_id: gid, name: name.trim()});
 }
 
 async function removeDev(id) {

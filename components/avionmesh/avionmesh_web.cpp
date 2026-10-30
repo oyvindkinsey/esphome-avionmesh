@@ -364,6 +364,10 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
         handle_import(request);
     } else if (url == "/api/set_mqtt_exposed" && method == HTTP_POST) {
         handle_set_mqtt_exposed(request);
+    } else if (url == "/api/rename_device" && method == HTTP_POST) {
+        handle_rename_device(request);
+    } else if (url == "/api/rename_group" && method == HTTP_POST) {
+        handle_rename_group(request);
     } else if (url == "/api/save" && method == HTTP_POST) {
         handle_save(request);
     } else if (url == "/api/export" && method == HTTP_GET) {
@@ -927,6 +931,66 @@ void AvionMeshWebHandler::handle_export(AsyncWebServerRequest *request) {
     auto *response = request->beginResponse(200, "application/json", body);
     response->addHeader("Content-Disposition", "attachment; filename=\"avionmesh-backup.json\"");
     request->send(response);
+}
+
+void AvionMeshWebHandler::handle_rename_device(AsyncWebServerRequest *request) {
+    std::string body = read_body(request);
+    if (body.empty()) {
+        send_error(request, 400, "empty_body");
+        return;
+    }
+
+    uint16_t avion_id = 0;
+    std::string name;
+    esphome::json::parse_json(body, [&](JsonObject root) -> bool {
+        avion_id = root["avion_id"] | 0u;
+        name = root["name"] | "";
+        return true;
+    });
+    if (avion_id == 0 || name.empty()) {
+        send_error(request, 400, "invalid_name");
+        return;
+    }
+
+    DeferredAction act;
+    act.type = DeferredAction::RenameDevice;
+    act.id1 = avion_id;
+    act.name = name;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
+    send_json(request, 200, "{\"status\":\"ok\"}");
+}
+
+void AvionMeshWebHandler::handle_rename_group(AsyncWebServerRequest *request) {
+    std::string body = read_body(request);
+    if (body.empty()) {
+        send_error(request, 400, "empty_body");
+        return;
+    }
+
+    uint16_t group_id = 0;
+    std::string name;
+    esphome::json::parse_json(body, [&](JsonObject root) -> bool {
+        group_id = root["group_id"] | 0u;
+        name = root["name"] | "";
+        return true;
+    });
+    if (group_id == 0 || name.empty()) {
+        send_error(request, 400, "invalid_name");
+        return;
+    }
+
+    DeferredAction act;
+    act.type = DeferredAction::RenameGroup;
+    act.id1 = group_id;
+    act.name = name;
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
+    send_json(request, 200, "{\"status\":\"ok\"}");
 }
 
 void AvionMeshWebHandler::handle_set_mqtt_exposed(AsyncWebServerRequest *request) {

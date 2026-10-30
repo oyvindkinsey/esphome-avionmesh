@@ -106,6 +106,15 @@ section { margin-bottom: 20px }
   font-weight: 600;
   font-size: .95em;
   white-space: nowrap;
+}
+.rename-link {
+  font-weight: 400;
+  font-size: .85em;
+  color: var(--accent2);
+  text-decoration: none;
+  margin-left: 6px;
+}
+.rename-link:hover { text-decoration: underline; }
   overflow: hidden;
   text-overflow: ellipsis;
 }

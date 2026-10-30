@@ -35,6 +35,8 @@ All endpoints: `POST`, `Content-Type: application/json`, except `/api/events`.
 | `POST /api/factory_reset` | Erase all data |
 | `POST /api/import` | Import device/group/passphrase data (from `avion_import.py`) |
 | `GET /api/export` | Backup in the same schema `POST /api/import` accepts (`reset`, `passphrase`, `devices`, `groups`). The passphrase is always included — a backup without the key cannot restore the mesh, so store the file safely |
+| `POST /api/rename_device` | Rename a device (`avion_id`, `name`); republishes MQTT discovery, emits `device_updated` |
+| `POST /api/rename_group` | Rename a group (`group_id`, `name`); republishes MQTT discovery, emits `group_updated` |
 
 ## SSE Events
 

@@ -825,6 +825,34 @@ void AvionMeshHub::process_deferred_actions() {
                 break;
             }
 
+            case DeferredAction::RenameDevice: {
+                auto *dev = db_.find_device(act.id1);
+                if (dev && db_.rename_device(act.id1, act.name)) {
+                    if (dev->mqtt_exposed)
+                        discovery_.publish_light(
+                            dev->avion_id, dev->name, has_dimming(dev->product_type),
+                            has_color_temp(dev->product_type), product_name(dev->product_type));
+                    char buf[160];
+                    snprintf(buf, sizeof(buf), "{\"avion_id\":%u,\"name\":\"%s\"}", dev->avion_id,
+                             dev->name.c_str());
+                    do_sse_emit("device_updated", buf);
+                }
+                break;
+            }
+
+            case DeferredAction::RenameGroup: {
+                auto *grp = db_.find_group(act.id1);
+                if (grp && db_.rename_group(act.id1, act.name)) {
+                    if (grp->mqtt_exposed)
+                        discovery_.publish_light(grp->group_id, grp->name, true, true);
+                    char buf[160];
+                    snprintf(buf, sizeof(buf), "{\"group_id\":%u,\"name\":\"%s\"}", grp->group_id,
+                             grp->name.c_str());
+                    do_sse_emit("group_updated", buf);
+                }
+                break;
+            }
+
             case DeferredAction::SaveDb: {
                 db_.save();
 #ifdef USE_ESP32

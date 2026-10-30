@@ -29,6 +29,8 @@ struct DeferredAction {
         Import,
         SetMqttExposed,
         SaveDb,
+        RenameDevice,
+        RenameGroup,
     };
     Type type;
     uint16_t id1{0};

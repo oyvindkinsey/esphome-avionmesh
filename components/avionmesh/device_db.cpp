@@ -197,6 +197,28 @@ bool DeviceDB::add_group(uint16_t group_id, const std::string &name) {
     return true;
 }
 
+bool DeviceDB::rename_device(uint16_t avion_id, const std::string &name) {
+    if (name.empty())
+        return false;
+    auto *dev = find_device(avion_id);
+    if (!dev)
+        return false;
+    dev->name = name;
+    save();
+    return true;
+}
+
+bool DeviceDB::rename_group(uint16_t group_id, const std::string &name) {
+    if (name.empty())
+        return false;
+    auto *grp = find_group(group_id);
+    if (!grp)
+        return false;
+    grp->name = name;
+    save();
+    return true;
+}
+
 bool DeviceDB::remove_group(uint16_t group_id) {
     auto it = std::remove_if(groups_.begin(), groups_.end(),
                              [group_id](const GroupEntry &g) { return g.group_id == group_id; });
