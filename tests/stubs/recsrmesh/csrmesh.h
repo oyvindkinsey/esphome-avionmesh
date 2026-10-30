@@ -40,6 +40,7 @@ using BleWriteFn = std::function<int(Characteristic, const uint8_t *, size_t, bo
 using RxCallback = std::function<void(const uint8_t *, size_t)>;
 struct Context {
     BleWriteFn ble_write;
+    RxCallback rx_cb = [](const uint8_t *, size_t) {};
 };
 inline void init(Context &, BleWriteFn, RxCallback) {}
 inline void feed(Context &, Characteristic, const uint8_t *, size_t, uint32_t) {}

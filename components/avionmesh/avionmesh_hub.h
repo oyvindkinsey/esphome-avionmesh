@@ -2,6 +2,12 @@
 
 #include "device_db.h"
 #include "mqtt_discovery.h"
+#include "mesh_capture.h"
+#include "controller_events.h"
+#include "controller_tables.h"
+#include "keypad_setup_journal.h"
+#include "absolute_dimmer.h"
+#include "local_dimmer.h"
 
 #include "esphome/core/component.h"
 #include "esphome/components/esp32_ble/ble.h"
@@ -13,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 
 namespace avionmesh {
@@ -28,9 +35,12 @@ struct DeferredAction {
         RemoveFromGroup,
         Import,
         SetMqttExposed,
+        SetLocalDimmerMode,
         SaveDb,
         RenameDevice,
         RenameGroup,
+        RefreshControllerBindings,
+        SetupControllerButtons,
     };
     Type type;
     uint16_t id1{0};
@@ -127,6 +137,44 @@ class AvionMeshHub : public esphome::Component {
     static constexpr uint32_t ASSOCIATION_TIMEOUT_MS = 30000;
 
     DeviceDB db_;
+    ControllerBindings controller_bindings_;
+    KeypadSetupJournal keypad_setup_journal_;
+    enum class KeypadSetupPhase : uint8_t {
+        WaitWake,
+        Baseline,
+        WaitBaseline,
+        Plan,
+        SlotRead,
+        WaitSlotRead,
+        Program,
+        WaitProgram,
+        Verify,
+        WaitVerify,
+        Finish
+    };
+    bool keypad_setup_active_{false}, keypad_setup_internal_{false};
+    bool keypad_setup_mapping_done_{false}, keypad_setup_mapping_ok_{false};
+    bool keypad_setup_slot_done_{false}, keypad_setup_slot_ok_{false};
+    bool keypad_setup_program_done_{false}, keypad_setup_reconcile_{false};
+    uint16_t keypad_setup_target_{0};
+    uint8_t keypad_setup_slot_{0};
+    uint32_t keypad_setup_request_{0xb0000000u};
+    uint32_t keypad_setup_wait_since_ms_{0};
+    uint64_t keypad_setup_mesh_tag_{0};
+    KeypadSetupPhase keypad_setup_phase_{KeypadSetupPhase::Baseline};
+    KeypadSetupPlan keypad_setup_plan_;
+    ControllerSlotRecords keypad_setup_working_{};
+    std::array<uint8_t, 8> keypad_setup_slot_reply_{};
+    std::set<uint16_t> keypad_setup_attempted_;
+    std::map<uint16_t, std::string> keypad_setup_status_;
+    void start_keypad_setup(uint16_t target, bool manual);
+    void process_keypad_setup();
+    void finish_keypad_setup(const std::string &status);
+    void keypad_setup_mapping_finished(uint16_t target, const char *status);
+    void keypad_setup_read_reply(const char *status, const uint8_t *payload, size_t length);
+    void keypad_setup_program_reply(const char *status);
+    std::string keypad_setup_status(uint16_t target) const;
+    void keypad_setup_emit();
     MqttDiscovery discovery_;
 
     bool mgmt_subscribed_{false};
@@ -187,6 +235,65 @@ class AvionMeshHub : public esphome::Component {
     static constexpr uint32_t STATE_REFRESH_INTERVAL_MS = 60000;
 
     uint32_t rx_count_{0};
+    MeshCapture capture_;
+    bool capture_reporting_{false};
+    void process_capture();
+    void report_capture_status(const char *action);
+    ControllerPacketQueue controller_packets_;
+    ControllerDuplicateWindow controller_duplicates_;
+    std::map<uint16_t, AbsoluteDimmerDirection> controller_dimmer_levels_;
+    std::map<uint16_t, LocalDimmerReports> controller_local_levels_;
+    uint32_t local_baseline_probe_ms_{0};
+    uint8_t local_baseline_probe_attempts_{0};
+    bool zero_dimming_query_seen_{false};
+    uint32_t zero_dimming_query_ms_{0};
+    uint32_t controller_events_published_{0}, controller_events_duplicates_{0};
+    uint32_t controller_events_expired_{0}, controller_events_offline_{0};
+    uint32_t controller_events_failed_{0};
+    bool controller_mqtt_was_connected_{false};
+    bool controller_availability_known_{false}, controller_available_{false};
+    uint32_t controller_mqtt_since_ms_{0}, controller_mesh_since_ms_{0};
+    void process_controller_events();
+    void set_local_dimmer_mode(uint16_t target, bool enabled);
+    std::string controller_input_status(uint16_t target) const;
+    std::string controller_bindings_json(uint16_t target);
+    void publish_controller_actions(uint16_t target);
+    void start_controller_binding_refresh(uint16_t target);
+    void process_controller_binding_refresh();
+    void binding_refresh_reply(const char *status, const uint8_t *payload, size_t length);
+    void finish_controller_binding_refresh(const char *status);
+    bool binding_refresh_active_{false}, binding_refresh_waiting_{false};
+    bool binding_refresh_waiting_wake_{false};
+    uint32_t binding_refresh_wait_since_ms_{0};
+    uint16_t binding_refresh_target_{0};
+    uint8_t binding_refresh_round_{0}, binding_refresh_slot_{0}, binding_refresh_attempt_{0};
+    uint32_t binding_refresh_request_{0x80000000u};
+    uint64_t binding_refresh_mesh_tag_{0};
+    std::array<ControllerSlotRecords, 2> binding_refresh_records_{};
+    std::array<std::array<uint8_t, 5>, 2> binding_refresh_counts_{};
+    std::map<uint16_t, std::string> binding_refresh_status_;
+    bool controller_read_active_{false};
+    bool controller_read_probe_{false}, controller_probe_count_{false};
+    bool controller_probe_padded_{false};
+    uint8_t controller_probe_noun_{0};
+    uint8_t controller_probe_transaction_{0};
+    uint16_t controller_read_target_{0};
+    uint8_t controller_read_slot_{0};
+    uint32_t controller_read_id_{0}, controller_read_since_ms_{0};
+    void report_controller_read(const char *status, const uint8_t *payload = nullptr,
+                                size_t length = 0);
+    struct ControllerSlotRead {
+        std::string raw;
+        uint32_t received_ms{0};
+    };
+    std::map<uint16_t, std::array<ControllerSlotRead, 4>> controller_slot_reads_;
+    bool controller_program_active_{false}, controller_program_clear_{false};
+    bool controller_program_secondary_{false};
+    uint16_t controller_program_target_{0};
+    uint8_t controller_program_slot_{0}, controller_program_transaction_{0};
+    uint32_t controller_program_id_{0}, controller_program_since_ms_{0};
+    void report_controller_program(const char *status, const uint8_t *payload = nullptr,
+                                   size_t length = 0);
 
     /* GAP scanning */
     void start_scan();
@@ -233,8 +340,10 @@ class AvionMeshHub : public esphome::Component {
     void update_mesh_initialized();
 
     void publish_all_discovery();
+    bool save_mesh_mqtt_exposure();
     void subscribe_all_commands();
     void send_response(const std::string &payload);
+    void report_claim_result(bool success, uint16_t device_id, const char *message = nullptr);
     void sync_time();
     void read_all_dimming();
     void read_all_color();

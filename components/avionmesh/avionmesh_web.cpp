@@ -207,8 +207,11 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                 json += "\",\"product_type\":";
                 json += std::to_string(dev.product_type);
                 json += ",\"product_name\":\"";
-                json += product_name(dev.product_type);
-                json += "\",\"groups\":[";
+                json += is_controller(dev.product_type) ? controller_name(dev.product_type)
+                                                        : product_name(dev.product_type);
+                json += "\",\"is_controller\":";
+                json += is_controller(dev.product_type) ? "true" : "false";
+                json += ",\"groups\":[";
                 for (size_t g = 0; g < dev.groups.size(); g++) {
                     if (g > 0)
                         json += ",";
@@ -216,13 +219,21 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                 }
                 json += "],\"mqtt_exposed\":";
                 json += dev.mqtt_exposed ? "true" : "false";
+                json += ",\"ha_setup_pending\":";
+                json += dev.ha_setup_pending ? "true" : "false";
+                json += ",\"ha_local_level\":";
+                json += dev.ha_local_level ? "true" : "false";
+                json += ",\"ha_input_status\":\"";
+                json += hub_->controller_input_status(dev.avion_id);
+                json += "\"";
                 json += ",\"has_dimming\":";
                 json += has_dimming(dev.product_type) ? "true" : "false";
                 json += ",\"has_color_temp\":";
                 json += has_color_temp(dev.product_type) ? "true" : "false";
 
                 auto sit = states.find(dev.avion_id);
-                if (sit != states.end() && sit->second.brightness_known) {
+                if (!is_controller(dev.product_type) && sit != states.end() &&
+                    sit->second.brightness_known) {
                     json += ",\"brightness\":";
                     json += std::to_string(sit->second.brightness);
                     if (sit->second.color_temp_known) {
@@ -234,6 +245,15 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
             }
             json += "]}";
             session->send("devices", json);
+            if (session->dead())
+                return;
+        }
+    }
+
+    // Saved per-controller button maps are separate from light/group metadata.
+    for (const auto &dev : db.devices()) {
+        if (is_controller(dev.product_type)) {
+            session->send("controller_buttons", hub_->controller_bindings_json(dev.avion_id));
             if (session->dead())
                 return;
         }
@@ -262,6 +282,8 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                 }
                 json += "],\"mqtt_exposed\":";
                 json += grp.mqtt_exposed ? "true" : "false";
+                json += ",\"ha_event_target\":";
+                json += grp.ha_event_target ? "true" : "false";
                 json += "}";
             }
             json += "]}";
@@ -362,6 +384,12 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
         handle_remove_from_group(request);
     } else if (url == "/api/import" && method == HTTP_POST) {
         handle_import(request);
+    } else if (url == "/api/controller_buttons/read" && method == HTTP_POST) {
+        handle_controller_bindings_read(request);
+    } else if (url == "/api/controller_buttons/setup" && method == HTTP_POST) {
+        handle_controller_setup(request);
+    } else if (url == "/api/controller_input_mode" && method == HTTP_POST) {
+        handle_local_dimmer_mode(request);
     } else if (url == "/api/set_mqtt_exposed" && method == HTTP_POST) {
         handle_set_mqtt_exposed(request);
     } else if (url == "/api/rename_device" && method == HTTP_POST) {
@@ -447,7 +475,13 @@ std::string AvionMeshWebHandler::read_body(AsyncWebServerRequest *request) {
 void AvionMeshWebHandler::send_json(AsyncWebServerRequest *request, int code,
                                     const std::string &json) {
     auto *response = request->beginResponse(code, "application/json", json);
-    response->addHeader("Cache-Control", "no-cache");
+    // ESPHome's wrapper maps unlisted status codes to 500. Set these new
+    // endpoint statuses explicitly after it initializes the response.
+    if (code == 202)
+        httpd_resp_set_status(*request, "202 Accepted");
+    if (code == 403)
+        httpd_resp_set_status(*request, "403 Forbidden");
+    response->addHeader("Cache-Control", "no-store");
     request->send(response);
 }
 
@@ -462,7 +496,7 @@ void AvionMeshWebHandler::handle_index(AsyncWebServerRequest *request) {
     auto *response =
         request->beginResponse(200, "text/html", AVIONMESH_WEB_HTML, AVIONMESH_WEB_HTML_SIZE);
     response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "public, max-age=3600");
+    response->addHeader("Cache-Control", "no-cache");
     request->send(response);
 }
 
@@ -550,6 +584,14 @@ void AvionMeshWebHandler::handle_scan_unassociated_post(AsyncWebServerRequest *r
 }
 
 void AvionMeshWebHandler::handle_claim_device(AsyncWebServerRequest *request) {
+    if (hub_->associating_ || hub_->discovering_mesh_ || hub_->pending_claim_auto_) {
+        send_error(request, 409, "busy");
+        return;
+    }
+    if (!hub_->crypto_initialized_ || hub_->db_.passphrase().empty()) {
+        send_error(request, 503, "mesh_not_initialized");
+        return;
+    }
     if (hub_->ble_state_ != BleState::Ready) {
         send_error(request, 503, "ble_not_ready");
         return;
@@ -843,6 +885,44 @@ void AvionMeshWebHandler::handle_import(AsyncWebServerRequest *request) {
     send_json(request, 200, "{\"status\":\"started\"}");
 }
 
+void AvionMeshWebHandler::handle_controller_bindings_read(AsyncWebServerRequest *request) {
+    const auto body = read_body(request);
+    JsonDocument doc;
+    if (deserializeJson(doc, body) || !doc["controller_id"].is<unsigned int>() ||
+        doc["controller_id"].as<unsigned int>() < 32896 ||
+        doc["controller_id"].as<unsigned int>() > 65407) {
+        send_error(request, 400, "invalid_controller_id");
+        return;
+    }
+    DeferredAction act;
+    act.type = DeferredAction::RefreshControllerBindings;
+    act.id1 = doc["controller_id"].as<uint16_t>();
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
+    send_json(request, 202, "{\"status\":\"started\"}");
+}
+
+void AvionMeshWebHandler::handle_controller_setup(AsyncWebServerRequest *request) {
+    const auto body = read_body(request);
+    JsonDocument doc;
+    if (deserializeJson(doc, body) || !doc["controller_id"].is<unsigned int>() ||
+        doc["controller_id"].as<unsigned int>() < 32896 ||
+        doc["controller_id"].as<unsigned int>() > 65407) {
+        send_error(request, 400, "invalid_controller_id");
+        return;
+    }
+    DeferredAction action;
+    action.type = DeferredAction::SetupControllerButtons;
+    action.id1 = doc["controller_id"].as<uint16_t>();
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(action));
+    }
+    send_json(request, 202, "{\"status\":\"started\"}");
+}
+
 void AvionMeshWebHandler::handle_save(AsyncWebServerRequest *request) {
     DeferredAction act;
     act.type = DeferredAction::SaveDb;
@@ -851,6 +931,25 @@ void AvionMeshWebHandler::handle_save(AsyncWebServerRequest *request) {
         hub_->pending_actions_.push_back(std::move(act));
     }
     send_json(request, 200, "{\"status\":\"ok\"}");
+}
+
+void AvionMeshWebHandler::handle_local_dimmer_mode(AsyncWebServerRequest *request) {
+    JsonDocument doc;
+    if (deserializeJson(doc, read_body(request)) || !doc["avion_id"].is<unsigned int>() ||
+        !doc["avion_id"].as<unsigned int>() || doc["avion_id"].as<unsigned int>() > 65535 ||
+        !doc["enabled"].is<bool>()) {
+        send_error(request, 400, "invalid_controller_input_mode");
+        return;
+    }
+    DeferredAction act;
+    act.type = DeferredAction::SetLocalDimmerMode;
+    act.id1 = doc["avion_id"].as<uint16_t>();
+    act.id2 = doc["enabled"].as<bool>();
+    {
+        std::lock_guard<std::mutex> lock(hub_->action_mutex_);
+        hub_->pending_actions_.push_back(std::move(act));
+    }
+    send_json(request, 200, "{\"status\":\"queued\"}");
 }
 
 namespace {
@@ -1000,14 +1099,14 @@ void AvionMeshWebHandler::handle_set_mqtt_exposed(AsyncWebServerRequest *request
         return;
     }
 
-    uint16_t id = 0;
-    bool exposed = false;
-
-    esphome::json::parse_json(body, [&](JsonObject root) -> bool {
-        id = root["id"] | 0u;
-        exposed = root["exposed"] | false;
-        return true;
-    });
+    JsonDocument doc;
+    if (deserializeJson(doc, body) || !doc["id"].is<unsigned int>() ||
+        doc["id"].as<unsigned int>() > 65535 || !doc["exposed"].is<bool>()) {
+        send_error(request, 400, "invalid_mqtt_exposure");
+        return;
+    }
+    const uint16_t id = doc["id"].as<uint16_t>();
+    const bool exposed = doc["exposed"].as<bool>();
 
     DeferredAction act;
     act.type = DeferredAction::SetMqttExposed;

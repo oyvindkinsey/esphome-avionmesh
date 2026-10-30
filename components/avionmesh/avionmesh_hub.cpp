@@ -56,6 +56,8 @@ void AvionMeshHub::setup() {
         ESP_LOGI(TAG, "Initializing passphrase from YAML config");
         db_.set_passphrase(passphrase_);
     }
+    controller_bindings_.load(db_.passphrase());
+    keypad_setup_journal_.load(db_.passphrase());
 
     auto *mqtt = esphome::mqtt::global_mqtt_client;
     if (mqtt) {
@@ -343,8 +345,8 @@ void AvionMeshHub::on_service_discovery_complete() {
         esp_ble_gattc_register_for_notify(gattc_if_, bridge_bda_, char_high_handle_);
 
         ble_state_ = BleState::Ready;
-        /* Mesh is now fully operational (crypto + BLE connected) */
-        mesh_initialized_ = true;
+        /* BLE readiness alone does not establish initialized mesh crypto. */
+        update_mesh_initialized();
         ESP_LOGI(TAG, "BLE ready - mesh operational");
     } else {
         ESP_LOGE(TAG, "CSRMesh characteristics not found (LOW=0x%04X HIGH=0x%04X)",
@@ -395,6 +397,14 @@ bool AvionMeshHub::init_crypto() {
             on_mesh_rx(mcp_source, crypto_source, opcode, payload, payload_len);
         });
 
+    // Preserve the library's full MASP/MCP handling. Tap reassembled frames
+    // without modifying the dependency or doing JSON/MQTT work in BLE callbacks.
+    auto original_mtl_rx = mesh_ctx_.mtl.rx_cb;
+    mesh_ctx_.mtl.rx_cb = [this, original_mtl_rx](const uint8_t *data, size_t length) {
+        controller_packets_.push(data, length, esphome::millis());
+        original_mtl_rx(data, length);
+    };
+
     crypto_initialized_ = true;
     ESP_LOGI(TAG, "CSRMesh crypto initialized");
     update_mesh_initialized();
@@ -406,6 +416,7 @@ void AvionMeshHub::update_mesh_initialized() {
     mesh_initialized_ = crypto_initialized_ && (ble_state_ == BleState::Ready);
 
     if (mesh_initialized_ && !was_initialized) {
+        controller_mesh_since_ms_ = esphome::millis();
         ESP_LOGI(TAG, "Mesh is now fully operational");
     } else if (!mesh_initialized_ && was_initialized) {
         ESP_LOGI(TAG, "Mesh is no longer operational (crypto=%d, ble=%d)", crypto_initialized_,
@@ -457,6 +468,28 @@ void AvionMeshHub::loop() {
     }
 
     process_deferred_actions();
+    process_capture();
+    process_controller_events();
+    const auto *read_device =
+        controller_read_active_ ? db_.find_device(controller_read_target_) : nullptr;
+    // Battery receive windows are short. A missed mapping READ can be retried
+    // safely while still awake; programming retains its separate one-attempt timeout.
+    const uint32_t read_timeout_ms =
+        controller_read_probe_                                                       ? 2500
+        : binding_refresh_active_ && read_device && read_device->product_type == 126 ? 750
+                                                                                     : 8000;
+    if (controller_read_active_ &&
+        (!mesh_initialized_ ||
+         static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) >= read_timeout_ms)) {
+        report_controller_read(mesh_initialized_ ? "timeout" : "disconnected");
+    }
+    process_controller_binding_refresh();
+    if (controller_program_active_ &&
+        (!mesh_initialized_ ||
+         static_cast<uint32_t>(esphome::millis() - controller_program_since_ms_) >= 8000)) {
+        report_controller_program("uncertain");
+    }
+    process_keypad_setup();
 
 #ifdef USE_ESP32
     /* Defer GATTC registration until esp32_ble has fully initialized BLE */
@@ -507,35 +540,33 @@ void AvionMeshHub::loop() {
 
     if (associating_) {
         if (csrmesh::protocol::is_complete(proto_ctx_)) {
-            uint16_t claimed_id = proto_ctx_.device_id;
-            ESP_LOGI(TAG, "Association complete for device %u", claimed_id);
+            ESP_LOGI(TAG, "Association complete for device %u", proto_ctx_.device_id);
             associating_ = false;
+            report_claim_result(true, proto_ctx_.device_id);
+            publish_all_discovery();
+            subscribe_all_commands();
             csrmesh::protocol::cleanup(proto_ctx_);
-            send_response("{\"action\":\"claim_device\",\"status\":\"ok\"}");
-            char buf[128];
-            snprintf(buf, sizeof(buf), "{\"status\":\"ok\",\"device_id\":%u}", claimed_id);
-            do_sse_emit("claim_result", buf);
+#ifdef USE_ESP32
+            if (web_handler_)
+                web_handler_->reset_sync();
+#endif
+            this->set_timeout("claimed_device_read", 1000, [this]() {
+                read_all_dimming();
+                this->set_timeout("claimed_device_color_read", 1000,
+                                  [this]() { read_all_color(); });
+            });
         } else if (csrmesh::protocol::is_error(proto_ctx_)) {
             ESP_LOGE(TAG, "Association failed: %s", proto_ctx_.error);
-            const char *errmsg = proto_ctx_.error ? proto_ctx_.error : "unknown";
             associating_ = false;
+            report_claim_result(false, proto_ctx_.device_id,
+                                proto_ctx_.error ? proto_ctx_.error : "unknown");
             csrmesh::protocol::cleanup(proto_ctx_);
-            char buf[128];
-            snprintf(buf, sizeof(buf),
-                     "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"%s\"}",
-                     errmsg);
-            send_response(buf);
-            char sse[160];
-            snprintf(sse, sizeof(sse), "{\"status\":\"error\",\"message\":\"%s\"}", errmsg);
-            do_sse_emit("claim_result", sse);
         } else if (esphome::millis() - association_start_ms_ > ASSOCIATION_TIMEOUT_MS) {
             ESP_LOGE(TAG, "Association timed out (state=%s)",
                      csrmesh::protocol::state_name(proto_ctx_.state));
             associating_ = false;
+            report_claim_result(false, proto_ctx_.device_id, "timeout");
             csrmesh::associate_cancel(mesh_ctx_);
-            send_response(
-                "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"timeout\"}");
-            do_sse_emit("claim_result", "{\"status\":\"error\",\"message\":\"timeout\"}");
         }
     }
 }
@@ -553,7 +584,15 @@ void AvionMeshHub::process_deferred_actions() {
 
     for (auto &act : actions) {
         switch (act.type) {
+            case DeferredAction::RefreshControllerBindings:
+                start_controller_binding_refresh(act.id1);
+                break;
+            case DeferredAction::SetupControllerButtons:
+                start_keypad_setup(act.id1, true);
+                break;
             case DeferredAction::Control:
+                if (auto *dev = db_.find_device(act.id1); dev && is_controller(dev->product_type))
+                    break;
                 if (act.brightness >= 0) {
                     Command cmd;
                     cmd_brightness(act.id1, static_cast<uint8_t>(act.brightness), cmd);
@@ -586,8 +625,11 @@ void AvionMeshHub::process_deferred_actions() {
                         json += "\",\"product_type\":";
                         json += std::to_string(dev->product_type);
                         json += ",\"product_name\":\"";
-                        json += product_name(dev->product_type);
-                        json += "\",\"groups\":[],\"mqtt_exposed\":false}";
+                        json += is_controller(dev->product_type)
+                                    ? controller_name(dev->product_type)
+                                    : product_name(dev->product_type);
+                        json += "\",\"groups\":[],\"mqtt_exposed\":";
+                        json += dev->mqtt_exposed ? "true}" : "false}";
                         do_sse_emit("device_added", json);
                     }
                 }
@@ -668,8 +710,22 @@ void AvionMeshHub::process_deferred_actions() {
                 break;
 
             case DeferredAction::Import: {
+                // A restored/imported inventory can refer to externally edited
+                // controllers even when it retains the same mesh key and IDs.
+                controller_bindings_.invalidate_all();
+                binding_refresh_status_.clear();
                 int added_devices = 0, added_groups = 0;
                 esphome::json::parse_json(act.body, [&](JsonObject root) -> bool {
+                    // Restoring an existing inventory must be able to populate
+                    // the gateway database without reprogramming physical devices.
+                    // Preserve upstream behavior unless explicitly requested.
+                    if (!root["metadata_only"].isNull() && !root["metadata_only"].is<bool>()) {
+                        ESP_LOGE(TAG, "Import metadata_only must be a boolean");
+                        return true;
+                    }
+                    const bool metadata_only = root["metadata_only"] | false;
+                    ESP_LOGI(TAG, "Import group membership mode: %s",
+                             metadata_only ? "local metadata only" : "program devices");
                     if (root["reset"] | false) {
                         ESP_LOGI(TAG, "Import with reset: clearing existing data");
                         for (auto &dev : db_.devices())
@@ -727,13 +783,24 @@ void AvionMeshHub::process_deferred_actions() {
                         }
 
                         JsonArray members = grp["members"];
+                        auto *existing_group = db_.find_group(group_id);
+                        if (existing_group &&
+                            (existing_group->ha_event_target ||
+                             is_controller_event_target(existing_group->name)) &&
+                            members.size()) {
+                            ESP_LOGE(TAG, "Refusing members on reserved controller event target %u",
+                                     group_id);
+                            continue;
+                        }
                         for (JsonVariant m : members) {
                             uint16_t member_id = m.as<uint16_t>();
                             if (member_id > 0) {
                                 db_.add_device_to_group(member_id, group_id);
-                                Command cmd;
-                                cmd_insert_group(member_id, group_id, cmd);
-                                do_mesh_send(cmd);
+                                if (!metadata_only) {
+                                    Command cmd;
+                                    cmd_insert_group(member_id, group_id, cmd);
+                                    do_mesh_send(cmd);
+                                }
                             }
                         }
                         esphome::App.feed_wdt();
@@ -759,33 +826,95 @@ void AvionMeshHub::process_deferred_actions() {
                 break;
             }
 
+            case DeferredAction::SetLocalDimmerMode:
+                set_local_dimmer_mode(act.id1, act.id2 != 0);
+                break;
             case DeferredAction::SetMqttExposed: {
                 uint16_t id = act.id1;
                 bool exposed = act.id2 != 0;
-
+                bool *flag = nullptr;
                 if (id == 0) {
                     /* Mesh broadcast entity */
-                    mesh_mqtt_exposed_ = exposed;
+                    flag = &mesh_mqtt_exposed_;
                 } else {
                     auto *dev = db_.find_device(id);
                     auto *grp = db_.find_group(id);
                     if (dev)
-                        dev->mqtt_exposed = exposed;
+                        flag = &dev->mqtt_exposed;
                     else if (grp)
-                        grp->mqtt_exposed = exposed;
+                        flag = &grp->mqtt_exposed;
                     else
                         break;
                 }
+                if (exposed) {
+                    const auto *group = db_.find_group(id);
+                    if (group && group->ha_event_target) {
+                        do_sse_emit("mqtt_toggled",
+                                    "{\"id\":" + std::to_string(id) +
+                                        ",\"mqtt_exposed\":false,\"status\":\"error\",\"saved\":"
+                                        "false,\"error\":\"reserved_event_target\"}");
+                        break;
+                    }
+                }
+                const bool previous = *flag;
+                auto *setup_device = db_.find_device(id);
+                const bool previous_pending = setup_device && setup_device->ha_setup_pending;
+                const bool queue_setup =
+                    setup_device &&
+                    queue_keypad_on_ha_enable(setup_device->product_type, previous, exposed);
+                if (queue_setup)
+                    setup_device->ha_setup_pending = true;
+                *flag = exposed;
+                // Persist before publishing discovery or acknowledging the
+                // checkbox. Every MQTT exposure toggle must survive reboot.
+                const bool saved = id == 0 ? save_mesh_mqtt_exposure() : db_.save();
+                if (!saved) {
+                    *flag = previous;
+                    if (setup_device)
+                        setup_device->ha_setup_pending = previous_pending;
+                    // Best effort rollback of a partially completed NVS write.
+                    if (id == 0)
+                        save_mesh_mqtt_exposure();
+                    else
+                        db_.save();
+                    const auto result = esphome::json::build_json([&](JsonObject root) {
+                        root["id"] = id;
+                        root["mqtt_exposed"] = previous;
+                        root["status"] = "error";
+                        root["saved"] = false;
+                        root["error"] = "save_failed";
+                    });
+                    do_sse_emit("mqtt_toggled", result);
+                    ESP_LOGE(TAG, "MQTT exposure for %u could not be saved", id);
+                    break;
+                }
 
+                if (queue_setup) {
+                    keypad_setup_attempted_.erase(id);
+                    keypad_setup_status_[id] = "pending";
+                }
+                if (auto *dev = db_.find_device(id); dev && dev->ha_local_level) {
+                    controller_local_levels_.erase(id);
+                    if (exposed && mesh_initialized_)
+                        read_all_dimming();
+                }
                 if (exposed) {
                     if (id == 0) {
                         discovery_.publish_light(0, "All Lights", true, true, "Mesh Broadcast");
                     } else {
                         auto *dev = db_.find_device(id);
                         if (dev) {
-                            discovery_.publish_light(id, dev->name, has_dimming(dev->product_type),
-                                                     has_color_temp(dev->product_type),
-                                                     product_name(dev->product_type));
+                            if (is_controller(dev->product_type)) {
+                                discovery_.remove_light(id);
+                                discovery_.publish_controller(id, dev->name,
+                                                              controller_name(dev->product_type));
+                                publish_controller_actions(id);
+                            } else {
+                                discovery_.publish_light(id, dev->name,
+                                                         has_dimming(dev->product_type),
+                                                         has_color_temp(dev->product_type),
+                                                         product_name(dev->product_type));
+                            }
                         } else {
                             auto *grp = db_.find_group(id);
                             if (grp)
@@ -800,36 +929,47 @@ void AvionMeshHub::process_deferred_actions() {
                             has_dim = has_dimming(dev->product_type);
                             has_ct = has_color_temp(dev->product_type);
                         }
-                        do_mqtt_subscribe(
-                            discovery_.command_topic(id),
-                            [this, id](const std::string &, const std::string &payload) {
-                                on_switch_command(id, payload);
-                            });
-                        if (has_dim) {
+                        if (!dev || !is_controller(dev->product_type)) {
                             do_mqtt_subscribe(
-                                discovery_.brightness_command_topic(id),
+                                discovery_.command_topic(id),
                                 [this, id](const std::string &, const std::string &payload) {
-                                    on_brightness_command(id, payload);
+                                    on_switch_command(id, payload);
                                 });
-                        }
-                        if (has_ct) {
-                            do_mqtt_subscribe(
-                                discovery_.color_temp_command_topic(id),
-                                [this, id](const std::string &, const std::string &payload) {
-                                    on_color_temp_command(id, payload);
-                                });
+                            if (has_dim) {
+                                do_mqtt_subscribe(
+                                    discovery_.brightness_command_topic(id),
+                                    [this, id](const std::string &, const std::string &payload) {
+                                        on_brightness_command(id, payload);
+                                    });
+                            }
+                            if (has_ct) {
+                                do_mqtt_subscribe(
+                                    discovery_.color_temp_command_topic(id),
+                                    [this, id](const std::string &, const std::string &payload) {
+                                        on_color_temp_command(id, payload);
+                                    });
+                            }
                         }
                     }
                     publish_device_state(id);
                 } else {
                     discovery_.remove_light(id);
+                    if (auto *dev = db_.find_device(id); dev && is_controller(dev->product_type))
+                        discovery_.remove_controller(id);
                 }
 
                 {
-                    char buf[64];
-                    snprintf(buf, sizeof(buf), "{\"id\":%u,\"mqtt_exposed\":%s}", id,
-                             exposed ? "true" : "false");
-                    do_sse_emit("mqtt_toggled", buf);
+                    const auto result = esphome::json::build_json([&](JsonObject root) {
+                        root["id"] = id;
+                        root["mqtt_exposed"] = exposed;
+                        root["status"] = "ok";
+                        root["saved"] = true;
+                        if (setup_device && is_controller(setup_device->product_type)) {
+                            root["ha_input_status"] = controller_input_status(id);
+                            root["ha_setup_pending"] = setup_device->ha_setup_pending;
+                        }
+                    });
+                    do_sse_emit("mqtt_toggled", result);
                 }
                 break;
             }
@@ -863,18 +1003,14 @@ void AvionMeshHub::process_deferred_actions() {
             }
 
             case DeferredAction::SaveDb: {
-                db_.save();
-#ifdef USE_ESP32
-                nvs_handle_t handle;
-                if (nvs_open("avionmesh", NVS_READWRITE, &handle) == ESP_OK) {
-                    uint8_t val = mesh_mqtt_exposed_ ? 1 : 0;
-                    nvs_set_u8(handle, "mesh_mqtt", val);
-                    nvs_commit(handle);
-                    nvs_close(handle);
-                }
-#endif
-                ESP_LOGI(TAG, "Database saved");
-                do_sse_emit("save_result", "{\"status\":\"ok\"}");
+                const bool saved = db_.save() && save_mesh_mqtt_exposure();
+                if (saved)
+                    ESP_LOGI(TAG, "Database saved");
+                else
+                    ESP_LOGE(TAG, "Database save failed");
+                do_sse_emit("save_result",
+                            saved ? "{\"status\":\"ok\"}"
+                                  : "{\"status\":\"error\",\"error\":\"save_failed\"}");
                 break;
             }
         }
@@ -901,6 +1037,7 @@ int AvionMeshHub::ble_write(csrmesh::Characteristic ch, const uint8_t *data, siz
 
 void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8_t opcode,
                               const uint8_t *payload, size_t payload_len) {
+    capture_.push(esphome::millis(), mcp_source, crypto_source, opcode, payload, payload_len);
     rx_count_++;
     uint16_t src = (mcp_source == 0x8000) ? crypto_source : mcp_source;
     ESP_LOGD(TAG, "RX #%u: src=%u opcode=0x%02X len=%zu", rx_count_, src, opcode, payload_len);
@@ -989,6 +1126,10 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
         }
     }
 
+    if (auto *controller = db_.find_device(crypto_source);
+        controller && is_controller(controller->product_type))
+        return;  // Route controller traffic through the command-event decoder.
+
     Status status;
     if (!parse_response(mcp_source, crypto_source, opcode, payload, payload_len, status))
         return;
@@ -996,6 +1137,8 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
     auto *dev = db_.find_device(status.avid);
     if (!dev)
         return;
+    if (is_controller(dev->product_type))
+        return;  // Commands and query replies are not controller light states.
 
     auto &state = device_states_[status.avid];
     if (status.has_brightness) {
@@ -1013,11 +1156,512 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
 
 /* ---- MQTT command handler ---- */
 
+std::string AvionMeshHub::controller_input_status(uint16_t target) const {
+    const auto *dev = db_.find_device(target);
+    if (!dev || !is_controller(dev->product_type))
+        return "unsupported";
+    if (!dev->mqtt_exposed)
+        return "disabled";
+    if (dev->product_type == 91 && dev->ha_local_level) {
+        const auto found = controller_local_levels_.find(target);
+        return found != controller_local_levels_.end() && found->second.ready()
+                   ? "ready_local_reports"
+                   : "waiting_for_baseline";
+    }
+    if (dev->product_type == 81 || dev->product_type == 91)
+        return "native_commands";
+    const auto status = keypad_setup_status(target);
+    if (status != "not_requested")
+        return status;
+    return dev->ha_setup_pending ? "pending" : "needs_assignment_read";
+}
+
+void AvionMeshHub::set_local_dimmer_mode(uint16_t target, bool enabled) {
+    const auto *dev = db_.find_device(target);
+    const bool valid = dev && dev->product_type == 91;
+    bool saved = false;
+    if (valid) {
+        auto devices = db_.devices();
+        for (auto &d : devices)
+            if (d.avion_id == target)
+                d.ha_local_level = enabled;
+        saved = db_.replace_inventory_metadata(std::move(devices), db_.groups());
+    }
+    const auto result = esphome::json::build_json([&](JsonObject root) {
+        root["action"] = "set_local_dimmer_mode";
+        root["avion_id"] = target;
+        root["status"] = saved ? "ok" : "error";
+        root["saved"] = saved;
+        if (saved)
+            root["enabled"] = enabled;
+        else
+            root["message"] = valid ? "save_failed" : "accessory_dimmer_required";
+    });
+    send_response(result);
+    do_sse_emit("controller_input_mode", result);
+    if (!saved)
+        return;
+    controller_local_levels_.erase(target);
+    controller_dimmer_levels_.erase(target);
+    publish_controller_actions(target);
+#ifdef USE_ESP32
+    if (web_handler_)
+        web_handler_->reset_sync();
+#endif
+    if (enabled && mesh_initialized_)
+        read_all_dimming();  // Baseline only, no light writes.
+}
+
+void AvionMeshHub::process_controller_events() {
+#ifdef USE_ESP32
+    if (controller_bindings_.bind_mesh(db_.passphrase())) {
+        controller_dimmer_levels_.clear();
+        controller_local_levels_.clear();
+        zero_dimming_query_seen_ = false;
+        binding_refresh_status_.clear();
+        publish_all_discovery();
+        if (web_handler_)
+            web_handler_->reset_sync();
+    }
+    auto *mqtt = esphome::mqtt::global_mqtt_client;
+    bool connected = mqtt && mqtt->is_connected();
+    if (!connected || !mesh_initialized_) {
+        controller_dimmer_levels_.clear();
+        controller_local_levels_.clear();
+        local_baseline_probe_attempts_ = 0;
+        local_baseline_probe_ms_ = 0;
+        zero_dimming_query_seen_ = false;
+    }
+    if (!connected)
+        controller_availability_known_ = false;
+    if (connected && !controller_mqtt_was_connected_) {
+        controller_mqtt_since_ms_ = esphome::millis();
+        publish_all_discovery();
+    }
+    controller_mqtt_was_connected_ = connected;
+    if (connected &&
+        (!controller_availability_known_ || controller_available_ != mesh_initialized_)) {
+        if (mqtt->publish(discovery_.controller_availability_topic(),
+                          std::string(mesh_initialized_ ? "online" : "offline"), 0, true)) {
+            controller_available_ = mesh_initialized_;
+            controller_availability_known_ = true;
+        }
+    }
+
+    // Start after the BLE link is actually ready. Retry missing read-only
+    // baselines three times at 5 s, then once per minute while a dimmer is offline.
+    if (connected && ble_state_ == BleState::Ready && !associating_) {
+        bool missing = false;
+        for (const auto &dev : db_.devices()) {
+            if (dev.product_type != 91 || !dev.ha_local_level || !dev.mqtt_exposed)
+                continue;
+            const auto found = controller_local_levels_.find(dev.avion_id);
+            missing = missing || found == controller_local_levels_.end() || !found->second.ready();
+        }
+        if (!missing)
+            local_baseline_probe_attempts_ = 0;
+        const uint32_t interval = local_baseline_probe_attempts_ < 3 ? 5000 : 60000;
+        if (missing &&
+            static_cast<uint32_t>(esphome::millis() - local_baseline_probe_ms_) >= interval) {
+            local_baseline_probe_ms_ = esphome::millis();
+            if (local_baseline_probe_attempts_ < 3)
+                ++local_baseline_probe_attempts_;
+            read_all_dimming();
+        }
+    }
+
+    ControllerPacketQueue::Packet packet;
+    for (unsigned i = 0; i < 8 && controller_packets_.pop(packet); ++i) {
+        csrmesh::mcp_crypto::Decrypted decrypted;
+        if (!crypto_initialized_ || csrmesh::mcp_crypto::decrypt_packet(
+                                        mesh_ctx_.mcp_key, {packet.bytes.data(), packet.length},
+                                        decrypted) != csrmesh::Error::Ok)
+            continue;
+        csrmesh::mcp::Parsed parsed;
+        if (!csrmesh::mcp::parse({decrypted.decrypted, decrypted.decrypted_len}, parsed))
+            continue;
+        if (is_untagged_dimming_query(parsed.opcode, parsed.payload, parsed.payload_len) &&
+            static_cast<uint32_t>(esphome::millis() - packet.received_ms) <= 1000) {
+            zero_dimming_query_seen_ = true;
+            zero_dimming_query_ms_ = packet.received_ms;
+        }
+        // Crypto source is authenticated. Never use the destination/header field
+        // as the controller identity; bridge echoes use source 0x8000 instead.
+        auto *dev = db_.find_device(decrypted.source);
+        if (!dev || !is_controller(dev->product_type))
+            continue;
+        if (dev->product_type == 126 &&
+            battery_keypad_wake_packet(parsed.opcode, parsed.payload, parsed.payload_len,
+                                       packet.received_ms, esphome::millis())) {
+            if (keypad_setup_active_ && keypad_setup_target_ == decrypted.source &&
+                keypad_setup_phase_ == KeypadSetupPhase::WaitWake) {
+                keypad_setup_phase_ = KeypadSetupPhase::Baseline;
+                keypad_setup_status_[decrypted.source] = "reading_assignments";
+                keypad_setup_emit();
+            }
+            if (binding_refresh_active_ && binding_refresh_target_ == decrypted.source &&
+                binding_refresh_waiting_wake_) {
+                binding_refresh_waiting_wake_ = false;
+                binding_refresh_wait_since_ms_ = esphome::millis();
+                binding_refresh_status_[decrypted.source] = "reading";
+                do_sse_emit("controller_buttons", controller_bindings_json(decrypted.source));
+            }
+        }
+        if (controller_program_active_ &&
+            static_cast<int32_t>(packet.received_ms - controller_program_since_ms_) >= 0 &&
+            controller_program_reply_matches(controller_program_target_,
+                                             controller_program_transaction_,
+                                             controller_program_clear_, decrypted.source,
+                                             parsed.opcode, parsed.payload, parsed.payload_len)) {
+            if (!controller_program_clear_ && !controller_program_secondary_ &&
+                parsed.payload[3] == 5) {
+                report_controller_program("primary_reply", parsed.payload, parsed.payload_len);
+                Command secondary;
+                controller_program_transaction_ =
+                    static_cast<uint8_t>(controller_program_transaction_ + 1);
+                build_controller_table_secondary(
+                    controller_program_target_, controller_program_slot_,
+                    controller_program_transaction_, secondary.payload);
+                secondary.dest_id = controller_program_target_;
+                secondary.payload_len = 10;
+                controller_program_secondary_ = true;
+                controller_program_since_ms_ = esphome::millis();
+                do_mesh_send(secondary);  // One observed secondary packet, never a retry loop.
+            } else {
+                report_controller_program("reply", parsed.payload, parsed.payload_len);
+            }
+        }
+        if (parsed.opcode == 0x73 && parsed.payload_len >= 2 && parsed.payload[1] == 0x30 &&
+            (parsed.payload[0] == 2 || parsed.payload[0] == 5)) {
+            if (binding_refresh_active_ && binding_refresh_target_ == decrypted.source)
+                finish_controller_binding_refresh("assignments_changed_during_read");
+            auto cached = controller_slot_reads_.find(decrypted.source);
+            if (cached != controller_slot_reads_.end())
+                for (auto &slot : cached->second)
+                    slot.raw.clear();
+            if (controller_bindings_.invalidate(decrypted.source)) {
+                binding_refresh_status_[decrypted.source] = "needs_refresh";
+                publish_controller_actions(decrypted.source);
+                do_sse_emit("controller_buttons", controller_bindings_json(decrypted.source));
+            }
+        }
+        if (controller_read_active_ &&
+            static_cast<int32_t>(packet.received_ms - controller_read_since_ms_) >= 0 &&
+            static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) < 8000 &&
+            (controller_read_probe_
+                 ? controller_probe_reply_matches(controller_read_target_, controller_probe_noun_,
+                                                  controller_probe_count_, decrypted.source,
+                                                  parsed.opcode, parsed.payload, parsed.payload_len)
+                 : controller_table_reply_matches(controller_read_target_, controller_read_slot_,
+                                                  decrypted.source, parsed.opcode, parsed.payload,
+                                                  parsed.payload_len))) {
+            report_controller_read("reply", parsed.payload, parsed.payload_len);
+        }
+        if (!dev->mqtt_exposed)
+            continue;
+        ControllerCommand command;
+        const bool local_report = dev->product_type == 91 && dev->ha_local_level;
+        if (local_report ? !decode_local_dimmer_report(dev->product_type, parsed.opcode,
+                                                       parsed.payload, parsed.payload_len, command)
+                         : !decode_controller_command(parsed.opcode, parsed.payload,
+                                                      parsed.payload_len, command))
+            continue;
+        auto now = esphome::millis();
+        if (!controller_duplicates_.accept(packet, now)) {
+            ++controller_events_duplicates_;
+            continue;
+        }
+        if (!controller_event_is_fresh(packet.received_ms, now, controller_mqtt_since_ms_,
+                                       controller_mesh_since_ms_)) {
+            ++controller_events_expired_;
+            continue;
+        }
+        if (!connected || !mesh_initialized_) {
+            ++controller_events_offline_;
+            continue;  // Consume and discard: never replay after reconnect.
+        }
+        AbsoluteDimmerDirection::Change local_change;
+        if (local_report) {
+            const bool previously_ready = controller_local_levels_[dev->avion_id].ready();
+            local_change = controller_local_levels_[dev->avion_id].observe(
+                decrypted.seq, command.brightness, packet.received_ms,
+                local_dimmer_report_is_query(command.transaction, zero_dimming_query_seen_,
+                                             zero_dimming_query_ms_, packet.received_ms));
+            if (!previously_ready && controller_local_levels_[dev->avion_id].ready()) {
+                publish_controller_actions(dev->avion_id);
+                do_sse_emit("controller_input_status",
+                            "{\"controller_id\":" + std::to_string(dev->avion_id) +
+                                ",\"status\":\"ready_local_reports\"}");
+            }
+            if (!local_change.accepted)
+                continue;  // Initial/query/reordered reports.
+        }
+        std::string raw;
+        static const char digits[] = "0123456789abcdef";
+        for (size_t j = 0; j < parsed.payload_len; ++j) {
+            raw += digits[parsed.payload[j] >> 4];
+            raw += digits[parsed.payload[j] & 15];
+        }
+        auto json = esphome::json::build_json([&](JsonObject root) {
+            root["schema"] = 1;
+            root["event_type"] = command.event_type;
+            root["source_id"] = decrypted.source;
+            root["mcp_source"] = parsed.source;
+            root["sequence"] = decrypted.seq;
+            root["received_ms"] = packet.received_ms;
+            root["opcode"] = parsed.opcode;
+            root["payload"] = raw;
+            if (local_report) {
+                root["input_source"] = "local_level_report";
+                root["report_kind"] = "unrequested";
+                root["report_transaction"] = command.transaction;
+                root["target_kind"] = "local";
+                root["target_id"] = nullptr;
+            } else if (command.absolute || command.relative) {
+                uint16_t target = command.target;
+                if (!target && parsed.source >= MIN_DEVICE_ID && parsed.source <= MAX_DEVICE_ID)
+                    target = parsed.source;
+                root["target_id"] = target;
+                root["target_kind"] =
+                    !target ? "broadcast" : (target < MIN_DEVICE_ID ? "group" : "device");
+                if (auto *group = db_.find_group(target); group && group->member_ids.empty()) {
+                    for (uint8_t slot = 1; slot <= 4; ++slot) {
+                        if (group->name == controller_event_target_name(decrypted.source, slot)) {
+                            root["button"] = slot;
+                            root["button_mapping"] = "reserved_target";
+                        }
+                    }
+                }
+            }
+            if (command.absolute)
+                root["brightness"] = command.brightness;
+            if (command.relative)
+                root["delta"] = command.delta;
+        });
+        if (mqtt->publish(discovery_.controller_event_topic(dev->avion_id), json, 0, false)) {
+            ++controller_events_published_;
+            do_sse_emit("controller_event", json);
+            uint16_t target = command.target;
+            if (!local_report && !target && parsed.source >= MIN_DEVICE_ID &&
+                parsed.source <= MAX_DEVICE_ID)
+                target = parsed.source;
+            const auto *snapshot = controller_bindings_.find(dev->avion_id);
+            const auto context = binding_context_slot(snapshot, dev->product_type, target);
+            const auto activated =
+                binding_activation_slot(snapshot, dev->product_type, target, command);
+            AbsoluteDimmerDirection::Change direction;
+            // Verified accessory and Anyplace dimmers emit absolute level
+            // streams. Scene-keypad activations must not become direction events.
+            if (local_report)
+                direction = local_change;
+            else if (supports_absolute_dimmer_direction(dev->product_type) && command.absolute)
+                direction = controller_dimmer_levels_[dev->avion_id].observe(
+                    target, decrypted.seq, command.brightness, packet.received_ms);
+            auto publish_action = [&](const std::string &action, bool button,
+                                      bool inferred = false) {
+                const auto event = esphome::json::build_json([&](JsonObject root) {
+                    root["schema"] = 1;
+                    root["event_type"] = button ? "activated" : "command";
+                    root["action"] = action;
+                    root["source_id"] = dev->avion_id;
+                    if (local_report) {
+                        root["target_id"] = nullptr;
+                        root["target_kind"] = "local";
+                        root["input_source"] = "local_level_report";
+                        root["report_kind"] = "unrequested";
+                        root["report_transaction"] = command.transaction;
+                    } else
+                        root["target_id"] = target;
+                    root["sequence"] = decrypted.seq;
+                    if (context)
+                        root["context_button"] = context;
+                    if (button)
+                        root["button"] = activated;
+                    if (command.absolute)
+                        root["brightness"] = command.brightness;
+                    if (action == "brightness")
+                        root["brightness_pct"] = (unsigned(command.brightness) * 100 + 127) / 255;
+                    if (command.relative)
+                        root["delta"] = command.delta;
+                    if (inferred) {
+                        root["direction_source"] =
+                            local_report ? "local_level_change" : "absolute_brightness_stream";
+                        root["previous_brightness"] = direction.previous;
+                        root["brightness_change"] = direction.difference;
+                    }
+                });
+                // Discovery/mapping metadata is retained; physical events never are.
+                mqtt->publish(discovery_.controller_action_topic(dev->avion_id, action), event, 0,
+                              false);
+            };
+            if (activated)
+                publish_action("button_" + std::to_string(activated), true);
+            if (command.relative ||
+                (command.absolute && (command.brightness == 0 || command.brightness == 255)))
+                publish_action(command.event_type, false);
+            if (direction.action)
+                publish_action(direction.action, false, true);
+            // A dedicated slider-level event avoids numeric-target filtering
+            // in HA. Older sequence packets remain in the unchanged legacy stream.
+            if ((dev->product_type == 81 || local_report) && command.absolute && direction.accepted)
+                publish_action("brightness", false);
+        } else {
+            ++controller_events_failed_;
+        }
+    }
+#endif
+}
+
+void AvionMeshHub::report_controller_read(const char *status, const uint8_t *payload,
+                                          size_t length) {
+    std::string raw;
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < length; ++i) {
+        raw += digits[payload[i] >> 4];
+        raw += digits[payload[i] & 15];
+    }
+    const bool probe = controller_read_probe_;
+    if (!probe && length == 8 && controller_read_slot_ >= 1 && controller_read_slot_ <= 4) {
+        controller_slot_reads_[controller_read_target_][controller_read_slot_ - 1] = {
+            raw, esphome::millis()};
+    }
+    auto response = esphome::json::build_json([&](JsonObject root) {
+        root["action"] = probe ? "controller_probe" : "controller_read";
+        root["status"] = status;
+        root["target"] = controller_read_target_;
+        root["slot"] = controller_read_slot_;
+        root["request_id"] = controller_read_id_;
+        if (probe) {
+            root["noun"] = controller_probe_noun_;
+            root["operation"] = controller_probe_count_ ? "count" : "read";
+            root["padded"] = controller_probe_padded_;
+            root["request_transaction"] = controller_probe_transaction_;
+            root["interpretation"] = "raw_response_only";
+        }
+        if (length)
+            root["payload"] = raw;
+    });
+    if (std::strcmp(status, "started")) {
+        controller_read_active_ = false;
+        controller_read_probe_ = false;
+    }
+    if (!probe) {
+        binding_refresh_reply(status, payload, length);
+        keypad_setup_read_reply(status, payload, length);
+    }
+    send_response(response);
+    do_sse_emit("controller_read_result", response);
+}
+
+void AvionMeshHub::report_controller_program(const char *status, const uint8_t *payload,
+                                             size_t length) {
+    std::string raw;
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < length; ++i) {
+        raw += digits[payload[i] >> 4];
+        raw += digits[payload[i] & 15];
+    }
+    auto response = esphome::json::build_json([&](JsonObject root) {
+        root["action"] = "controller_program";
+        root["status"] = status;
+        root["target"] = controller_program_target_;
+        root["slot"] = controller_program_slot_;
+        root["request_id"] = controller_program_id_;
+        root["phase"] = controller_program_secondary_ ? "secondary" : "primary";
+        if (length)
+            root["payload"] = raw;
+        root["verification"] = "fresh_readback_required";
+    });
+    if (std::strcmp(status, "started") && std::strcmp(status, "primary_reply"))
+        controller_program_active_ = false;
+    send_response(response);
+    do_sse_emit("controller_program_result", response);
+    keypad_setup_program_reply(status);
+}
+
+void AvionMeshHub::report_capture_status(const char *action) {
+    auto status = capture_.status(esphome::millis());
+    std::string json = esphome::json::build_json([&](JsonObject root) {
+        root["action"] = action;
+        root["status"] = "ok";
+        root["active"] = status.active;
+        root["session"] = status.session;
+        root["received"] = status.received;
+        root["dropped"] = status.dropped;
+        root["truncated"] = status.truncated;
+        root["queued"] = status.queued;
+    });
+    send_response(json);
+}
+
+void AvionMeshHub::process_capture() {
+    if (!capture_reporting_)
+        return;
+    MeshCapture::Packet packet;
+    // Bound per-loop JSON/network work; retain repeats for offline analysis.
+    for (unsigned i = 0; i < 8 && capture_.pop(packet); ++i) {
+        char hex[MeshCapture::MAX_PAYLOAD * 2 + 1];
+        static const char digits[] = "0123456789abcdef";
+        for (size_t j = 0; j < packet.length; ++j) {
+            hex[j * 2] = digits[packet.payload[j] >> 4];
+            hex[j * 2 + 1] = digits[packet.payload[j] & 15];
+        }
+        hex[packet.length * 2] = '\0';
+        std::string json = esphome::json::build_json([&](JsonObject root) {
+            root["schema"] = 1;
+            root["session"] = packet.session;
+            root["received_ms"] = packet.received_ms;
+            root["mcp_source"] = packet.mcp_source;
+            root["crypto_source"] = packet.crypto_source;
+            root["opcode"] = packet.opcode;
+            root["payload"] = hex;
+            root["original_length"] = packet.original_length;
+            root["truncated"] = packet.original_length != packet.length;
+        });
+        // Diagnostic stream only: no HA event discovery, retention or offline replay.
+        do_mqtt_publish(discovery_.management_response_topic() + "/capture", json, false);
+        do_sse_emit("mesh_capture", json);
+    }
+    auto status = capture_.status(esphome::millis());
+    if (!status.active && !status.queued) {
+        capture_reporting_ = false;
+        report_capture_status("capture_complete");
+    }
+}
+
 void AvionMeshHub::on_mqtt_command(const std::string &payload) {
     ESP_LOGI(TAG, "Management command: %s", payload.c_str());
 
     esphome::json::parse_json(payload, [this](JsonObject root) -> bool {
         std::string action = root["action"] | "";
+        if (keypad_setup_active_ && !keypad_setup_internal_ &&
+            (action == "controller_read" || action == "controller_program")) {
+            send_response(
+                "{\"action\":\"controller_busy\",\"status\":\"error\",\"message\":\"automatic_"
+                "keypad_setup_active\"}");
+            return true;
+        }
+
+        if (action == "capture_start") {
+            unsigned seconds = root["seconds"] | 120u;
+            unsigned source = root["source"] | 0u;
+            if (seconds < 1 || seconds > 600 || source > 65535 || capture_reporting_ ||
+                !capture_.start(esphome::millis(), seconds * 1000, source)) {
+                send_response(
+                    "{\"action\":\"capture_start\",\"status\":\"error\","
+                    "\"message\":\"capture_busy_or_invalid_parameters\"}");
+            } else {
+                capture_reporting_ = true;
+                report_capture_status("capture_start");
+            }
+            return true;
+        }
+        if (action == "capture_stop" || action == "capture_status") {
+            if (action == "capture_stop")
+                capture_.stop();
+            report_capture_status(action.c_str());
+            return true;
+        }
 
         if (action == "status") {
             char buf[192];
@@ -1027,6 +1671,76 @@ void AvionMeshHub::on_mqtt_command(const std::string &payload) {
                      static_cast<uint8_t>(ble_state_), db_.devices().size(), db_.groups().size(),
                      rx_count_);
             send_response(buf);
+            return true;
+        }
+        if (action == "controller_status") {
+            auto json = esphome::json::build_json([&](JsonObject response) {
+                response["action"] = "controller_status";
+                response["mesh_ready"] = mesh_initialized_;
+                response["published"] = controller_events_published_;
+                response["duplicates"] = controller_events_duplicates_;
+                response["expired"] = controller_events_expired_;
+                response["offline_dropped"] = controller_events_offline_;
+                response["publish_failed"] = controller_events_failed_;
+                response["packet_queue_dropped"] = controller_packets_.dropped();
+                auto levels = response["local_dimmers"].to<JsonArray>();
+                for (const auto &dev : db_.devices()) {
+                    if (dev.product_type != 91 || !dev.ha_local_level)
+                        continue;
+                    auto entry = levels.add<JsonObject>();
+                    entry["avion_id"] = dev.avion_id;
+                    const auto found = controller_local_levels_.find(dev.avion_id);
+                    const bool ready =
+                        found != controller_local_levels_.end() && found->second.ready();
+                    entry["baseline_ready"] = ready;
+                    if (ready)
+                        entry["brightness"] = found->second.level();
+                }
+            });
+            send_response(json);
+            return true;
+        }
+
+        if (action == "set_local_dimmer_mode") {
+            const auto id =
+                root["avion_id"].is<unsigned int>() ? root["avion_id"].as<unsigned int>() : 0;
+            if (!id || id > 65535 || !root["enabled"].is<bool>()) {
+                send_response(
+                    "{\"action\":\"set_local_dimmer_mode\",\"status\":\"error\",\"message\":"
+                    "\"invalid_parameters\"}");
+                return true;
+            }
+            set_local_dimmer_mode(id, root["enabled"].as<bool>());
+            return true;
+        }
+        if (action == "protect_event_group") {
+            const auto id =
+                root["group_id"].is<unsigned int>() ? root["group_id"].as<unsigned int>() : 0;
+            const auto *group = id && id < MIN_DEVICE_ID ? db_.find_group(id) : nullptr;
+            const std::string expected = root["expected_name"] | "";
+            if (!group || !root["enabled"].is<bool>() || group->name != expected ||
+                !group->member_ids.empty() || group->mqtt_exposed) {
+                send_response(
+                    "{\"action\":\"protect_event_group\",\"status\":\"error\",\"message\":\"empty_"
+                    "unexposed_named_group_required\"}");
+                return true;
+            }
+            auto groups = db_.groups();
+            for (auto &g : groups)
+                if (g.group_id == id)
+                    g.ha_event_target = root["enabled"].as<bool>();
+            const bool saved = db_.replace_inventory_metadata(db_.devices(), std::move(groups));
+            const auto result = esphome::json::build_json([&](JsonObject out) {
+                out["action"] = "protect_event_group";
+                out["group_id"] = id;
+                out["status"] = saved ? "ok" : "error";
+                out["saved"] = saved;
+            });
+            send_response(result);
+#ifdef USE_ESP32
+            if (saved && web_handler_)
+                web_handler_->reset_sync();
+#endif
             return true;
         }
 
@@ -1040,7 +1754,158 @@ void AvionMeshHub::on_mqtt_command(const std::string &payload) {
             return true;
         }
 
-        if (action == "scan_unassociated") {
+        if (action == "controller_probe") {
+            const unsigned target =
+                root["target"].is<unsigned int>() ? root["target"].as<unsigned int>() : 0;
+            const unsigned noun =
+                root["noun"].is<unsigned int>() ? root["noun"].as<unsigned int>() : 0;
+            const unsigned slot =
+                root["slot"].is<unsigned int>() ? root["slot"].as<unsigned int>() : 999;
+            const unsigned request = root["request_id"] | 0u;
+            const std::string operation = root["operation"] | "";
+            const bool padded = root["padded"] | false;
+            const unsigned transaction =
+                root["transaction"].is<unsigned int>() ? root["transaction"].as<unsigned int>() : 0;
+            const auto *dev = target <= 65535 ? db_.find_device(target) : nullptr;
+            Command cmd;
+            size_t length = 0;
+            const bool valid =
+                dev && is_controller(dev->product_type) &&
+                (root["padded"].isNull() || root["padded"].is<bool>()) &&
+                (root["transaction"].isNull() || root["transaction"].is<unsigned int>()) &&
+                transaction <= 255 && (noun != 10 || transaction != 0) &&
+                (operation == "count" || operation == "read") &&
+                build_controller_probe(target, noun, operation == "count", slot, cmd.payload,
+                                       length, padded, transaction);
+            const bool busy =
+                controller_read_active_ || controller_program_active_ || binding_refresh_active_ ||
+                associating_ || discovering_mesh_ || examining_ || scanning_unassociated_ ||
+                (keypad_setup_active_ && keypad_setup_phase_ != KeypadSetupPhase::WaitWake);
+            if (!valid || busy) {
+                const auto response = esphome::json::build_json([&](JsonObject out) {
+                    out["action"] = "controller_probe";
+                    out["status"] = "error";
+                    out["request_id"] = request;
+                    out["message"] = valid ? "controller_busy" : "invalid_probe";
+                });
+                send_response(response);
+                return true;
+            }
+            controller_read_probe_ = true;
+            controller_probe_noun_ = noun;
+            controller_probe_count_ = operation == "count";
+            controller_probe_padded_ = padded;
+            controller_probe_transaction_ = transaction;
+            controller_read_target_ = target;
+            controller_read_slot_ = slot;
+            controller_read_id_ = request;
+            controller_read_since_ms_ = esphome::millis();
+            controller_read_active_ = true;
+            cmd.dest_id = target;
+            cmd.payload_len = length;
+            report_controller_read("started");
+            do_mesh_send(cmd);
+            return true;
+        }
+        if (action == "controller_program") {
+            unsigned target = root["target"] | 0u;
+            unsigned slot = root["slot"] | 0u;
+            unsigned group_id = root["group_id"] | 0u;
+            bool clear = root["clear"] | false;
+            bool reference = root["reference"] | false;
+            auto *dev = target <= 65535 ? db_.find_device(target) : nullptr;
+            auto *group = group_id <= 65535 ? db_.find_group(group_id) : nullptr;
+            std::string expected = root["expected_record"] | "";
+            auto record_set = controller_slot_reads_.find(target);
+            bool fresh = controller_program_slot_supported(slot) &&
+                         record_set != controller_slot_reads_.end() &&
+                         controller_snapshot_matches(record_set->second[slot - 1].raw, expected,
+                                                     record_set->second[slot - 1].received_ms,
+                                                     esphome::millis());
+            // Positive control for protocol research: only the exact real group
+            // freshly read from slot 1, which this transaction never modifies.
+            char reference_record[17];
+            snprintf(reference_record, sizeof(reference_record), "01300001%04x08ff", group_id);
+            bool known_reference =
+                reference && group && record_set != controller_slot_reads_.end() &&
+                record_set->second[0].raw == reference_record &&
+                static_cast<uint32_t>(esphome::millis() - record_set->second[0].received_ms) <
+                    60000;
+            bool reserved = group && group->member_ids.empty() && !group->mqtt_exposed &&
+                            group->name == controller_event_target_name(target, slot);
+            bool currently_owned_target = false;
+            if (fresh) {
+                for (const auto &candidate : db_.groups()) {
+                    if (!candidate.member_ids.empty() || candidate.mqtt_exposed ||
+                        candidate.name != controller_event_target_name(target, slot))
+                        continue;
+                    char owned_record[17];
+                    snprintf(owned_record, sizeof(owned_record), "0130000%u%04x08ff", slot,
+                             candidate.group_id);
+                    if (expected == owned_record)
+                        currently_owned_target = true;
+                }
+            }
+            Command cmd;
+            if (!mesh_initialized_ || !dev || dev->product_type != 127 ||
+                !controller_program_slot_supported(slot) || !fresh || controller_program_active_ ||
+                controller_read_active_ || binding_refresh_active_ || associating_ ||
+                discovering_mesh_ || examining_ || scanning_unassociated_ ||
+                (!clear && !(reserved || known_reference)) ||
+                !controller_extra_slot_write_allowed(slot, clear, expected, reserved,
+                                                     currently_owned_target) ||
+                !build_controller_table_program(target, slot, 0, clear, group_id, cmd.payload)) {
+                auto response = esphome::json::build_json([&](JsonObject response) {
+                    response["action"] = "controller_program";
+                    response["status"] = "error";
+                    response["request_id"] = root["request_id"] | 0u;
+                    response["message"] = "unsupported_busy_stale_or_unreserved_target";
+                });
+                send_response(response);
+            } else {
+                controller_program_target_ = target;
+                controller_program_slot_ = slot;
+                controller_program_id_ = root["request_id"] | 0u;
+                controller_program_transaction_ = controller_program_id_ & 255;
+                controller_program_clear_ = clear;
+                controller_program_secondary_ = false;
+                controller_program_since_ms_ = esphome::millis();
+                controller_program_active_ = true;
+                cmd.payload[4] = controller_program_transaction_;
+                cmd.payload_len = 10;
+                cmd.dest_id = target;
+                record_set->second[slot - 1].raw.clear();
+                report_controller_program("started");
+                do_mesh_send(cmd);  // One attempt only; reconcile even if ACK is lost.
+            }
+        } else if (action == "controller_read") {
+            auto target = root["target"] | 0u;
+            auto slot = root["slot"] | 0u;
+            auto *dev = target <= 65535 ? db_.find_device(target) : nullptr;
+            Command cmd;
+            if (!mesh_initialized_ || !dev ||
+                (dev->product_type != 127 && dev->product_type != 126) || slot > 4 ||
+                controller_read_active_ || controller_program_active_ || binding_refresh_active_ ||
+                associating_ || discovering_mesh_ || examining_ || scanning_unassociated_ ||
+                !build_controller_table_read(target, slot, cmd.payload, cmd.payload_len)) {
+                auto response = esphome::json::build_json([&](JsonObject response) {
+                    response["action"] = "controller_read";
+                    response["status"] = "error";
+                    response["request_id"] = root["request_id"] | 0u;
+                    response["message"] = "invalid_or_busy_read";
+                });
+                send_response(response);
+            } else {
+                controller_read_target_ = target;
+                controller_read_slot_ = slot;
+                controller_read_id_ = root["request_id"] | 0u;
+                controller_read_since_ms_ = esphome::millis();
+                controller_read_active_ = true;
+                cmd.dest_id = target;
+                report_controller_read("started");
+                do_mesh_send(cmd);
+            }
+        } else if (action == "scan_unassociated") {
             handle_scan_unassociated();
         } else if (action == "claim_device") {
             handle_claim_device(root["uuid_hash"] | 0u, root["device_id"] | 0u,
@@ -1141,10 +2006,30 @@ void AvionMeshHub::handle_scan_unassociated() {
     });
 }
 
+void AvionMeshHub::report_claim_result(bool success, uint16_t device_id, const char *message) {
+    std::string payload = esphome::json::build_json([&](JsonObject root) {
+        root["action"] = "claim_device";
+        root["status"] = success ? "ok" : "error";
+        root["device_id"] = device_id;
+        if (message)
+            root["message"] = message;
+    });
+    send_response(payload);
+    do_sse_emit("claim_result", payload);
+}
+
 void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
                                        const std::string &name, uint8_t product_type) {
     if (associating_) {
-        send_response("{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"busy\"}");
+        report_claim_result(false, device_id, "busy");
+        return;
+    }
+    if (!crypto_initialized_ || db_.passphrase().empty()) {
+        report_claim_result(false, device_id, "mesh_key_not_configured");
+        return;
+    }
+    if (device_id < MIN_DEVICE_ID || device_id > MAX_DEVICE_ID || db_.find_device(device_id)) {
+        report_claim_result(false, device_id, "invalid_or_reserved_device_id");
         return;
     }
 
@@ -1156,8 +2041,7 @@ void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
     auto err = csrmesh::protocol::init(proto_ctx_, uuid_hash, device_id, db_.passphrase().c_str());
     if (err != csrmesh::Error::Ok) {
         ESP_LOGE(TAG, "Proto init failed: %d", static_cast<int>(err));
-        send_response(
-            "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"proto_init\"}");
+        report_claim_result(false, device_id, "proto_init");
         return;
     }
 
@@ -1165,8 +2049,7 @@ void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
     if (err != csrmesh::Error::Ok) {
         ESP_LOGE(TAG, "Associate start failed: %d", static_cast<int>(err));
         csrmesh::protocol::cleanup(proto_ctx_);
-        send_response(
-            "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"start_failed\"}");
+        report_claim_result(false, device_id, "start_failed");
         return;
     }
 
@@ -1179,7 +2062,7 @@ void AvionMeshHub::handle_claim_device(uint32_t uuid_hash, uint16_t device_id,
         do_sse_emit("claim_result", buf);
     }
 
-    db_.add_device(device_id, product_type, name);
+    db_.add_device(device_id, product_type, name, product_type == 91);
 }
 
 uint16_t AvionMeshHub::next_device_id() {
@@ -1233,10 +2116,21 @@ void AvionMeshHub::handle_claim_device_auto() {
         // states in loop().
         handle_claim_device(pending_claim_uuid_hash_, device_id, pending_claim_name_,
                             pending_claim_product_type_);
+
+        // Completion is reported only after csrmesh::protocol::is_complete().
     });
 }
 
 void AvionMeshHub::handle_unclaim_device(uint16_t avion_id) {
+    controller_dimmer_levels_.erase(avion_id);
+    controller_local_levels_.erase(avion_id);
+    if (keypad_setup_active_ && keypad_setup_target_ == avion_id)
+        finish_keypad_setup("device_removed");
+    if (keypad_setup_journal_.active && keypad_setup_journal_.controller == avion_id)
+        keypad_setup_journal_.clear();
+    keypad_setup_attempted_.erase(avion_id);
+    keypad_setup_status_.erase(avion_id);
+    controller_bindings_.remove(avion_id);
     ESP_LOGI(TAG, "Unclaiming device %u", avion_id);
 
     if (associating_) {
@@ -1245,6 +2139,8 @@ void AvionMeshHub::handle_unclaim_device(uint16_t avion_id) {
     }
 
     csrmesh::disassociate(mesh_ctx_, avion_id);
+    if (auto *dev = db_.find_device(avion_id); dev && is_controller(dev->product_type))
+        discovery_.remove_controller(avion_id);
     db_.remove_device(avion_id);
     discovery_.remove_light(avion_id);
 
@@ -1264,6 +2160,13 @@ void AvionMeshHub::handle_create_group(uint16_t group_id, const std::string &nam
 }
 
 void AvionMeshHub::handle_delete_group(uint16_t group_id) {
+    if (auto *group = db_.find_group(group_id);
+        group && (group->ha_event_target || is_controller_event_target(group->name))) {
+        send_response(
+            "{\"action\":\"delete_group\",\"status\":\"error\",\"message\":\"reserved_event_"
+            "target\"}");
+        return;
+    }
     db_.remove_group(group_id);
     discovery_.remove_light(group_id);
 
@@ -1274,6 +2177,13 @@ void AvionMeshHub::handle_delete_group(uint16_t group_id) {
 }
 
 void AvionMeshHub::handle_add_to_group(uint16_t avion_id, uint16_t group_id) {
+    if (auto *group = db_.find_group(group_id);
+        group && (group->ha_event_target || is_controller_event_target(group->name))) {
+        send_response(
+            "{\"action\":\"add_to_group\",\"status\":\"error\",\"message\":\"reserved_event_"
+            "target\"}");
+        return;
+    }
     Command cmd;
     cmd_insert_group(avion_id, group_id, cmd);
     do_mesh_send(cmd);
@@ -1357,6 +2267,8 @@ void AvionMeshHub::handle_add_discovered(uint16_t device_id, const std::string &
              name.c_str(), product_type);
 
     db_.add_device(device_id, product_type, name);
+    publish_all_discovery();
+    subscribe_all_commands();
 
     char buf[128];
     snprintf(buf, sizeof(buf), "{\"action\":\"add_discovered\",\"device_id\":%u,\"status\":\"ok\"}",
@@ -1494,6 +2406,8 @@ void AvionMeshHub::handle_factory_reset() {
 /* ---- Light commands from MQTT (separate topics, bare payloads) ---- */
 
 void AvionMeshHub::on_switch_command(uint16_t avion_id, const std::string &payload) {
+    if (auto *dev = db_.find_device(avion_id); dev && is_controller(dev->product_type))
+        return;
     uint8_t brightness;
     if (payload != "ON") {
         brightness = 0;
@@ -1515,6 +2429,8 @@ void AvionMeshHub::on_switch_command(uint16_t avion_id, const std::string &paylo
 }
 
 void AvionMeshHub::on_brightness_command(uint16_t avion_id, const std::string &payload) {
+    if (auto *dev = db_.find_device(avion_id); dev && is_controller(dev->product_type))
+        return;
     uint8_t brightness = static_cast<uint8_t>(strtoul(payload.c_str(), nullptr, 10));
 
     uint32_t now = esphome::millis();
@@ -1539,6 +2455,8 @@ void AvionMeshHub::on_brightness_command(uint16_t avion_id, const std::string &p
 }
 
 void AvionMeshHub::on_color_temp_command(uint16_t avion_id, const std::string &payload) {
+    if (auto *dev = db_.find_device(avion_id); dev && is_controller(dev->product_type))
+        return;
     uint16_t mireds = static_cast<uint16_t>(strtoul(payload.c_str(), nullptr, 10));
     uint16_t kelvin = mireds > 0 ? 1000000u / mireds : 3000;
     Command cmd;
@@ -1552,10 +2470,32 @@ void AvionMeshHub::on_color_temp_command(uint16_t avion_id, const std::string &p
 
 /* ---- Helpers ---- */
 
+bool AvionMeshHub::save_mesh_mqtt_exposure() {
+#ifdef USE_ESP32
+    nvs_handle_t handle;
+    if (nvs_open("avionmesh", NVS_READWRITE, &handle) != ESP_OK)
+        return false;
+    bool ok = nvs_set_u8(handle, "mesh_mqtt", mesh_mqtt_exposed_ ? 1 : 0) == ESP_OK;
+    if (ok)
+        ok = nvs_commit(handle) == ESP_OK;
+    nvs_close(handle);
+    return ok;
+#else
+    return true;
+#endif
+}
+
 void AvionMeshHub::publish_all_discovery() {
     for (auto &dev : db_.devices()) {
         if (!dev.mqtt_exposed)
             continue;
+        if (is_controller(dev.product_type)) {
+            discovery_.remove_light(dev.avion_id);
+            discovery_.publish_controller(dev.avion_id, dev.name,
+                                          controller_name(dev.product_type));
+            publish_controller_actions(dev.avion_id);
+            continue;
+        }
         bool has_dim = has_dimming(dev.product_type);
         bool has_ct = has_color_temp(dev.product_type);
         discovery_.publish_light(dev.avion_id, dev.name, has_dim, has_ct,
@@ -1591,7 +2531,7 @@ void AvionMeshHub::subscribe_all_commands() {
     };
 
     for (auto &dev : db_.devices()) {
-        if (!dev.mqtt_exposed)
+        if (!dev.mqtt_exposed || is_controller(dev.product_type))
             continue;
         subscribe_light(dev.avion_id, has_dimming(dev.product_type),
                         has_color_temp(dev.product_type));
@@ -1636,6 +2576,9 @@ void AvionMeshHub::read_all_dimming() {
     ESP_LOGI(TAG, "Broadcasting READ DIMMING");
     Command cmd;
     cmd_read_all_dimming(cmd);
+    // Model-91 reports echo this byte. Keep bridge queries distinct from its
+    // zero-tag unsolicited reports, including unchanged On/Off inputs.
+    cmd.payload[4] = 0xd0;
     do_mesh_send(cmd);
 }
 
@@ -1664,6 +2607,8 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
     } else {
         auto *dev = db_.find_device(avion_id);
         if (dev) {
+            if (is_controller(dev->product_type))
+                return;
             mqtt_exposed = dev->mqtt_exposed;
             supports_ct = has_color_temp(dev->product_type);
         } else {
