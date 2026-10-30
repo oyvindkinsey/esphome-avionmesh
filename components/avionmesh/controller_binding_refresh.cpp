@@ -33,6 +33,11 @@ std::string AvionMeshHub::controller_bindings_json(uint16_t target) {
         if (binding_refresh_active_ && binding_refresh_target_ == target) {
             root["round"] = binding_refresh_round_ + 1;
             root["query_slot"] = binding_refresh_slot_;
+            if (binding_refresh_product_ == 126) {
+                root["wake_reason"] = binding_refresh_wake_reason_;
+                root["wake_retries"] = binding_refresh_wake_retries_;
+                root["read_session_timeout_ms"] = 180000;
+            }
         }
         if (!dev || (dev->product_type != 127 && dev->product_type != 126))
             return;
@@ -85,8 +90,10 @@ void AvionMeshHub::start_controller_binding_refresh(uint16_t target) {
     binding_refresh_counts_ = {};
     binding_refresh_active_ = true;
     binding_refresh_waiting_ = false;
-    binding_refresh_waiting_wake_ = dev->product_type == 126 && !keypad_setup_internal_;
-    binding_refresh_wait_since_ms_ = esphome::millis();
+    binding_refresh_waiting_wake_ = dev->product_type == 126;
+    binding_refresh_wake_retries_ = 0;
+    binding_refresh_wake_reason_ = "initial_round";
+    binding_refresh_started_ms_ = binding_refresh_wait_since_ms_ = esphome::millis();
     binding_refresh_status_[target] =
         binding_refresh_waiting_wake_ ? "waiting_for_wake" : "reading";
     controller_bindings_.invalidate(target);
@@ -113,7 +120,7 @@ void AvionMeshHub::handle_battery_keypad_wake(uint16_t source, uint8_t opcode,
     if (binding_refresh_active_ && binding_refresh_target_ == source &&
         binding_refresh_waiting_wake_ &&
         static_cast<int32_t>(received - binding_refresh_wait_since_ms_) >= 0 &&
-        static_cast<uint32_t>(esphome::millis() - binding_refresh_wait_since_ms_) < 180000) {
+        static_cast<uint32_t>(esphome::millis() - binding_refresh_started_ms_) < 180000) {
         binding_refresh_waiting_wake_ = false;
         binding_refresh_wait_since_ms_ = esphome::millis();
         binding_refresh_status_[source] = "reading";
@@ -127,6 +134,29 @@ uint32_t AvionMeshHub::controller_read_timeout_ms() const {
     if (controller_read_probe_)
         return 2500;
     return binding_refresh_active_ && device && device->product_type == 126 ? 750 : 8000;
+}
+bool AvionMeshHub::controller_read_reply_is_current(uint16_t source, uint8_t opcode,
+                                                    const uint8_t *payload, size_t length,
+                                                    uint32_t received) const {
+    return controller_read_active_ && payload &&
+           (!binding_refresh_active_ || binding_refresh_product_ != 126 ||
+            static_cast<uint32_t>(esphome::millis() - binding_refresh_started_ms_) < 180000) &&
+           static_cast<int32_t>(received - controller_read_since_ms_) >= 0 &&
+           static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) <
+               controller_read_timeout_ms() &&
+           (controller_read_probe_
+                ? controller_probe_reply_matches(controller_read_target_, controller_probe_noun_,
+                                                 controller_probe_count_, source, opcode, payload,
+                                                 length)
+                : controller_table_reply_matches(controller_read_target_, controller_read_slot_,
+                                                 source, opcode, payload, length));
+}
+void AvionMeshHub::wait_for_battery_binding_wake(const char *reason) {
+    binding_refresh_waiting_wake_ = true;
+    binding_refresh_wait_since_ms_ = esphome::millis();
+    binding_refresh_wake_reason_ = reason;
+    binding_refresh_status_[binding_refresh_target_] = "waiting_for_wake";
+    do_sse_emit("controller_buttons", controller_bindings_json(binding_refresh_target_));
 }
 void AvionMeshHub::finish_controller_binding_refresh(const char *status) {
     binding_refresh_active_ = binding_refresh_waiting_ = false;
@@ -151,11 +181,15 @@ void AvionMeshHub::process_controller_binding_refresh() {
         finish_controller_binding_refresh("controller_removed_or_model_changed");
         return;
     }
-    if (binding_refresh_waiting_wake_) {
-        if (static_cast<uint32_t>(esphome::millis() - binding_refresh_wait_since_ms_) >= 180000)
-            finish_controller_binding_refresh("wake_timeout_try_read_again");
+    if (device->product_type == 126 &&
+        static_cast<uint32_t>(esphome::millis() - binding_refresh_started_ms_) >= 180000) {
+        finish_controller_binding_refresh(binding_refresh_waiting_wake_
+                                              ? "wake_timeout_try_read_again"
+                                              : "read_session_timeout_try_again");
         return;
     }
+    if (binding_refresh_waiting_wake_)
+        return;
     // Let the keypad finish its wake announcement before the first request.
     if (device->product_type == 126 &&
         static_cast<uint32_t>(esphome::millis() - binding_refresh_wait_since_ms_) < 150)
@@ -190,8 +224,19 @@ void AvionMeshHub::binding_refresh_reply(const char *status, const uint8_t *payl
         return;
     binding_refresh_waiting_ = false;
     if (std::strcmp(status, "reply")) {
-        if (!std::strcmp(status, "timeout") && ++binding_refresh_attempt_ <= 2 && mesh_initialized_)
-            return;
+        if (!std::strcmp(status, "timeout") && mesh_initialized_) {
+            if (binding_refresh_product_ == 126) {
+                if (++binding_refresh_wake_retries_ <= 2) {
+                    // Never assemble a round from different awake windows.
+                    binding_refresh_slot_ = binding_refresh_attempt_ = 0;
+                    binding_refresh_records_[binding_refresh_round_] = {};
+                    binding_refresh_counts_[binding_refresh_round_] = {};
+                    wait_for_battery_binding_wake("read_timeout_restart_round");
+                    return;
+                }
+            } else if (++binding_refresh_attempt_ <= 2)
+                return;
+        }
         finish_controller_binding_refresh("read_failed");
         return;
     }
@@ -235,6 +280,12 @@ void AvionMeshHub::binding_refresh_reply(const char *status, const uint8_t *payl
             return;
         }
         binding_refresh_slot_ = 0;
+        if (binding_refresh_product_ == 126) {
+            // The observed awake interval fits one round, not two. A new wake
+            // is required for the independent complete verification round.
+            wait_for_battery_binding_wake("verification_round");
+            return;
+        }
     }
     do_sse_emit("controller_buttons", controller_bindings_json(binding_refresh_target_));
 }

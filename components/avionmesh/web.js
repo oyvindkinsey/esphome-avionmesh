@@ -148,7 +148,7 @@ function controllerBindingsCard(d) {
   const setupStatus = binding?.setup_status || (d.ha_setup_pending ? 'pending' : 'not_requested');
   const outcome = binding?.status;
   let message = '';
-  if (reading && outcome === 'waiting_for_wake') message = 'Close the HALO app, then press the battery keypad’s bottom Power/Off button once to begin reading.';
+  if (reading && outcome === 'waiting_for_wake') message = `Waiting for battery wake for round ${binding.round}/2${binding.wake_reason === 'read_timeout_restart_round' ? ' (previous partial round timed out and was discarded)' : ''}. Close the HALO app; use the keypad’s bottom Power/Off button to continue the requested read.`;
   else if (reading) message = `Reading assignments: round ${binding.round}/2, ${binding.query_slot ? 'button ' + binding.query_slot : 'count'}…`;
   else if (outcome === 'saved') message = 'Mapping verified twice and saved. Native assignments were not changed.';
   else if (outcome && !['needs_refresh','model_unverified'].includes(outcome)) message = `Read status: ${outcome.replaceAll('_',' ')}.`;

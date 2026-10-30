@@ -271,9 +271,14 @@ class AvionMeshHub : public esphome::Component {
     void handle_battery_keypad_wake(uint16_t source, uint8_t opcode, const uint8_t *payload,
                                     size_t length, uint32_t received);
     uint32_t controller_read_timeout_ms() const;
+    bool controller_read_reply_is_current(uint16_t source, uint8_t opcode, const uint8_t *payload,
+                                           size_t length, uint32_t received) const;
+    void wait_for_battery_binding_wake(const char *reason);
     bool binding_refresh_waiting_wake_{false};
     uint8_t binding_refresh_product_{0};
-    uint32_t binding_refresh_wait_since_ms_{0};
+    uint32_t binding_refresh_wait_since_ms_{0}, binding_refresh_started_ms_{0};
+    uint8_t binding_refresh_wake_retries_{0};
+    const char *binding_refresh_wake_reason_{"initial_round"};
     uint16_t binding_refresh_target_{0};
     uint8_t binding_refresh_round_{0}, binding_refresh_slot_{0}, binding_refresh_attempt_{0};
     uint32_t binding_refresh_request_{0x80000000u};

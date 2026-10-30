@@ -1389,17 +1389,8 @@ void AvionMeshHub::process_controller_events() {
                 do_sse_emit("controller_buttons", controller_bindings_json(decrypted.source));
             }
         }
-        if (controller_read_active_ &&
-            static_cast<int32_t>(packet.received_ms - controller_read_since_ms_) >= 0 &&
-            static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) <
-                controller_read_timeout_ms() &&
-            (controller_read_probe_
-                 ? controller_probe_reply_matches(controller_read_target_, controller_probe_noun_,
-                                                  controller_probe_count_, decrypted.source,
-                                                  parsed.opcode, parsed.payload, parsed.payload_len)
-                 : controller_table_reply_matches(controller_read_target_, controller_read_slot_,
-                                                  decrypted.source, parsed.opcode, parsed.payload,
-                                                  parsed.payload_len))) {
+        if (controller_read_reply_is_current(decrypted.source, parsed.opcode, parsed.payload,
+                                             parsed.payload_len, packet.received_ms)) {
             report_controller_read("reply", parsed.payload, parsed.payload_len);
         }
         if (!dev->mqtt_exposed)

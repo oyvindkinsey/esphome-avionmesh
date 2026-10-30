@@ -39,6 +39,23 @@ class BatteryHub : public TestHub {
         report_controller_read("reply", payload, length);
     }
     void timeout() { report_controller_read("timeout"); }
+    void next_wake() {
+        const uint32_t now = esphome::millis() + 1000;
+        esphome::set_test_millis(now);
+        wake(BATTERY, now);
+        step(now + 150);
+    }
+    bool receive(const uint8_t *payload, size_t length, uint32_t received,
+                 uint16_t source = BATTERY) {
+        if (!controller_read_reply_is_current(source, 0x73, payload, length, received))
+            return false;
+        report_controller_read("reply", payload, length);
+        return true;
+    }
+    void ordinary_on(uint32_t received) {
+        const uint8_t on[]{0, 10, 2, 0xf4, 0, 255, 0, 0, 0, 0};
+        handle_battery_keypad_wake(BATTERY, 0x73, on, sizeof(on), received);
+    }
     void tick(uint32_t now) {
         esphome::set_test_millis(now);
         loop();
@@ -105,7 +122,13 @@ TEST(BatteryKeypad, WakeTimeoutAndSleepRetriesNeverWriteOrReserveGroups) {
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
         ASSERT_TRUE(hub.reading());
         hub.timeout();
-        hub.step(181150 + attempt * 750);
+        hub.step(esphome::millis());
+        if (attempt < 2) {
+            EXPECT_FALSE(hub.reading());
+            EXPECT_EQ(hub.status()["status"], "waiting_for_wake");
+            EXPECT_EQ(hub.status()["wake_reason"], "read_timeout_restart_round");
+            hub.next_wake();
+        }
     }
     EXPECT_FALSE(hub.refreshing());
     EXPECT_EQ(hub.status()["status"], "read_failed");
@@ -116,7 +139,7 @@ TEST(BatteryKeypad, WakeTimeoutAndSleepRetriesNeverWriteOrReserveGroups) {
         EXPECT_EQ(command.payload[1], 0x30);
     }
     EXPECT_TRUE(hub.db().groups().empty());
-    hub.step(190000);  // No silent auto-resume after sleep/timeouts.
+    hub.step(esphome::millis() + 10000);  // No silent auto-resume after sleep/timeouts.
     EXPECT_EQ(hub.mesh_sends.size(), 3u);
 }
 
@@ -126,6 +149,7 @@ TEST(BatteryKeypad, MatchingFullBaselinePersistsNativeButtonButCannotEnableProgr
     hub.wake();
     hub.step(1150);
     hub.feed_round();
+    hub.next_wake();
     hub.feed_round();
     ASSERT_TRUE(hub.snapshot() && hub.snapshot()->valid);
     EXPECT_EQ(hub.snapshot()->records, BASELINE);
@@ -155,6 +179,7 @@ TEST(BatteryKeypad, MatchingRoundsWithCountMismatchCannotSaveMapping) {
     hub.wake();
     hub.step(1150);
     hub.feed_round(0);
+    hub.next_wake();
     hub.feed_round(0);
     EXPECT_FALSE(hub.snapshot() && hub.snapshot()->valid);
     EXPECT_EQ(hub.status()["status"], "count_does_not_match_assignments");
@@ -168,6 +193,7 @@ TEST(BatteryKeypad, ChangingBaselineCannotSaveMapping) {
     hub.feed_round();
     auto changed = BASELINE;
     changed[0][5] ^= 1;
+    hub.next_wake();
     hub.feed_round(1, changed);
     EXPECT_FALSE(hub.snapshot() && hub.snapshot()->valid);
     EXPECT_EQ(hub.status()["status"], "assignments_changed_during_read");
@@ -196,7 +222,7 @@ TEST(BatteryKeypad, DisconnectModelRemovalAndMeshChangeCancelOutstandingRead) {
     }
 }
 
-TEST(BatteryKeypad, ActualLoopUsesShortReadDeadlineAndBoundsRetry) {
+TEST(BatteryKeypad, ActualLoopUsesShortDeadlineThenWaitsForWakeInsteadOfRetryingAsleep) {
     BatteryHub hub;
     hub.start_controller_binding_refresh(BATTERY);
     hub.wake();
@@ -204,14 +230,18 @@ TEST(BatteryKeypad, ActualLoopUsesShortReadDeadlineAndBoundsRetry) {
     hub.tick(1899);
     EXPECT_EQ(hub.mesh_sends.size(), 1u);
     hub.tick(1900);
-    EXPECT_EQ(hub.mesh_sends.size(), 2u);
-    hub.tick(2650);
-    EXPECT_EQ(hub.mesh_sends.size(), 3u);
-    hub.tick(3400);
-    EXPECT_FALSE(hub.refreshing());
+    EXPECT_EQ(hub.mesh_sends.size(), 1u);
     EXPECT_FALSE(hub.reading());
-    EXPECT_EQ(hub.status()["status"], "read_failed");
-    EXPECT_EQ(hub.mesh_sends.size(), 3u);
+    EXPECT_EQ(hub.status()["status"], "waiting_for_wake");
+    hub.tick(5000);
+    EXPECT_EQ(hub.mesh_sends.size(), 1u);
+    hub.ordinary_on(5000);
+    hub.tick(5100);
+    EXPECT_EQ(hub.mesh_sends.size(), 1u);
+    hub.next_wake();
+    EXPECT_EQ(hub.mesh_sends.size(), 2u);
+    EXPECT_TRUE(hub.reading());
+    EXPECT_EQ(hub.mesh_sends.back().payload[0], 4); // Restart at COUNT.
 }
 
 TEST(BatteryKeypad, WakeRequestAndSettlingSurviveMillisWrap) {
@@ -261,6 +291,7 @@ TEST(BatteryKeypad, FourReadyNativeSlotsStillReportUnsupportedProgramming) {
     hub.wake();
     hub.step(1150);
     hub.feed_round(4, full);
+    hub.next_wake();
     hub.feed_round(4, full);
     auto status = hub.status();
     EXPECT_EQ(status["setup_status"], "programming_unverified");
@@ -277,6 +308,7 @@ TEST(BatteryKeypad, DirectProgrammingRemainsRejectedAfterFreshReadAndOwnedEmptyT
     hub.wake();
     hub.step(1150);
     hub.feed_round();
+    hub.next_wake();
     hub.feed_round();
     ASSERT_TRUE(hub.db().add_group(24574, "HA event target: 40026:2"));
     hub.clear_captures();
@@ -295,4 +327,100 @@ TEST(BatteryKeypad, DirectProgrammingRemainsRejectedAfterFreshReadAndOwnedEmptyT
     }
     EXPECT_TRUE(rejected);
     EXPECT_EQ(hub.snapshot()->records, BASELINE);
+}
+
+TEST(BatteryKeypad, ObservedFirstRoundTimingWaitsForSecondWakeAndRejectsOldReplies) {
+    BatteryHub hub;
+    hub.start_controller_binding_refresh(BATTERY);
+    EXPECT_FALSE(hub.receive(BASELINE[0].data(), 8, 999)); // Pre-wake READ-shaped packet.
+    hub.wake();
+    hub.step(1150);
+    EXPECT_FALSE(hub.receive(BASELINE[1].data(), 8, 1000)); // Wrong shape for current COUNT.
+    const uint8_t count[]{4, 0x30, 0, 1, 4};
+    esphome::set_test_millis(1538);
+    ASSERT_TRUE(hub.receive(count, sizeof(count), 1538));
+    const uint32_t times[]{1838, 2138, 2378, 2558};
+    for (unsigned slot = 0; slot < 4; ++slot) {
+        hub.step(esphome::millis());
+        esphome::set_test_millis(times[slot]);
+        ASSERT_TRUE(hub.receive(BASELINE[slot].data(), 8, times[slot]));
+    }
+    EXPECT_EQ(hub.status()["status"], "waiting_for_wake");
+    EXPECT_EQ(hub.status()["round"], 2);
+    EXPECT_EQ(hub.status()["wake_reason"], "verification_round");
+    EXPECT_EQ(hub.mesh_sends.size(), 5u);
+    EXPECT_FALSE(hub.snapshot() && hub.snapshot()->valid);
+    hub.step(3000);
+    hub.wake(BATTERY, 2500); // Fresh enough, but before the second wake wait.
+    hub.step(3200);
+    EXPECT_EQ(hub.mesh_sends.size(), 5u);
+    EXPECT_FALSE(hub.receive(BASELINE[1].data(), 8, 3200)); // Late old reply while idle.
+    hub.ordinary_on(3200);
+    hub.step(3400);
+    EXPECT_EQ(hub.mesh_sends.size(), 5u);
+    hub.next_wake();
+    ASSERT_EQ(hub.mesh_sends.size(), 6u);
+    EXPECT_FALSE(hub.receive(BASELINE[1].data(), 8, esphome::millis())); // Old slot vs new COUNT.
+    EXPECT_FALSE(hub.receive(count, 5, 1538)); // Queued before current request.
+    EXPECT_FALSE(hub.receive(count, 5, esphome::millis(), 40027)); // Foreign source.
+    hub.feed_round();
+    ASSERT_TRUE(hub.snapshot() && hub.snapshot()->valid);
+    EXPECT_EQ(hub.snapshot()->records, BASELINE);
+    EXPECT_EQ(hub.mesh_sends.size(), 10u);
+}
+
+TEST(BatteryKeypad, TimeoutDiscardsPartialVerificationRoundAndRestartsAtCountAfterWake) {
+    BatteryHub hub;
+    hub.start_controller_binding_refresh(BATTERY);
+    hub.wake();
+    hub.step(1150);
+    hub.feed_round();
+    hub.next_wake();
+    const uint8_t count[]{4, 0x30, 0, 1, 4};
+    hub.reply(count, sizeof(count));
+    hub.step(esphome::millis());
+    auto changed = BASELINE[0];
+    changed[5] ^= 1;
+    hub.reply(changed.data(), changed.size());
+    hub.step(esphome::millis()); // Slot 2 now pending when the receive window ends.
+    hub.timeout();
+    EXPECT_FALSE(hub.reading());
+    EXPECT_EQ(hub.status()["query_slot"], 0);
+    EXPECT_EQ(hub.status()["round"], 2);
+    EXPECT_EQ(hub.status()["wake_retries"], 1);
+    EXPECT_FALSE(hub.snapshot() && hub.snapshot()->valid);
+    hub.next_wake();
+    EXPECT_EQ(hub.mesh_sends.back().payload[0], 4);
+    hub.feed_round(); // Must read COUNT and every slot again, replacing discarded partial data.
+    ASSERT_TRUE(hub.snapshot() && hub.snapshot()->valid);
+    EXPECT_EQ(hub.snapshot()->records, BASELINE);
+    EXPECT_TRUE(hub.db().groups().empty());
+}
+
+TEST(BatteryKeypad, SecondWakeCannotExtendOriginalSessionDeadlineOrResumeAfterRestart) {
+    BatteryHub hub;
+    hub.start_controller_binding_refresh(BATTERY);
+    hub.wake();
+    hub.step(1150);
+    hub.feed_round();
+    esphome::set_test_millis(180800);
+    hub.wake(BATTERY, 180800);
+    hub.step(180950);
+    ASSERT_TRUE(hub.reading()); // A request can start near the original deadline.
+    const uint8_t count[]{4, 0x30, 0, 1, 4};
+    esphome::set_test_millis(181000);
+    EXPECT_FALSE(hub.receive(count, sizeof(count), 181000)); // No late finalization past 180s.
+    hub.step(181000);
+    EXPECT_FALSE(hub.refreshing());
+    EXPECT_FALSE(hub.reading());
+    EXPECT_EQ(hub.status()["status"], "read_session_timeout_try_again");
+    EXPECT_EQ(hub.mesh_sends.size(), 6u);
+    hub.wake(BATTERY, 181000);
+    hub.step(182000);
+    EXPECT_EQ(hub.mesh_sends.size(), 6u);
+    BatteryHub restarted;
+    restarted.db().find_device(BATTERY)->ha_setup_pending = true; // Historical stored trial flag.
+    restarted.tick(2000);
+    EXPECT_FALSE(restarted.refreshing());
+    EXPECT_TRUE(restarted.mesh_sends.empty());
 }

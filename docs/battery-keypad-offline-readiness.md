@@ -35,15 +35,44 @@ read-only wake classifier. Neither an ordinary brightness packet, another
 source, an old queued packet nor a wake after the three-minute request deadline
 opens a receive window.
 
-After wake the reader settles for 150 ms. Each battery table request has a
-750 ms deadline (including queued replies), with at most two timeout retries.
-It never retries a write. Two complete rounds must agree, record indexes must
-match all four slots, and COUNT must match occupied records before saving.
-A disconnect, mesh change, controller removal or product change cancels this
-reader and its outstanding request. Timeout/failure stops the attempt; a new
-explicit read starts a new bounded wake wait. Restart reloads saved records;
-it does not resume an interrupted battery read or initiate assignment writes.
-A new refresh still requires a new wake.
+After wake the reader settles for 150 ms and reads one complete COUNT plus
+four-slot round. It then waits for a new authenticated wake indication before
+starting the second complete round. Each request has a 750 ms deadline,
+including queued replies. A timed-out battery read discards the current partial
+round and returns to COUNT after a new wake; it never combines partial rounds
+from different receive windows. At most two such restarts are allowed across the
+whole session (at most four wake windows for two successful rounds). The entire
+explicit read has one hard 180-second deadline measured from its original start;
+a second wake or retry never extends it. Status includes `round`, `wake_reason`,
+`wake_retries` and `read_session_timeout_ms` while active.
+
+Two complete rounds must agree, record indexes must match all four slots, and
+COUNT must match occupied records before saving. Source, expected slot, current
+request send time and reply deadline remain checked; packets while waiting for
+wake are not read replies. A disconnect, mesh change, controller removal or
+product change cancels this reader and its outstanding request. Exhausted
+restarts/failure stop the attempt. Restart reloads saved records; it does not
+resume a partial battery read or initiate assignment writes, even if an old
+setup-pending flag exists. A new refresh still requires a new wake.
+
+## Evidence motivating separate wake windows
+
+A saved development capture completed its first COUNT/four-slot round 1,558 ms
+after the wake indication. The second COUNT arrived at +2,159 ms and slot 1 at
++2,464 ms; slot 2 did not arrive until a later physical action at +16,081 ms.
+That is consistent with a short receive window; it does not establish a precise
+sleep timer or prove why the later response was delayed. Earlier READ-shaped
+packets came from the same authenticated controller before the observed wake.
+They are compatible with earlier queued queries, but this receive-only capture
+contains no outbound request history or RF sequence metadata to prove causality.
+
+The observed replies retain a zero transaction field. The reader does not invent
+an echoed transaction scheme. Source/shape/time guards reject queued pre-request
+and wrong-slot replies, but cannot prove that an otherwise matching newly received
+zero-tag reply was caused by a particular newly sent request. Full matching
+rounds are read evidence, not permission for battery programming. No battery
+writes are added by the multi-wake implementation; physical validation of it
+remains pending.
 
 ## Owner-started read/event acceptance (pending)
 
@@ -57,7 +86,8 @@ session's isolation/baseline/rollback procedure; this checklist executes nothing
    The last verified development baseline was one native Button 1 and three
    unused slots; re-establish it instead of assuming it remains current.
 2. Start the explicit read with the vendor app closed. Observe waiting, the
-   authenticated wake, settling, ten successful requests and saved status. Do
+   authenticated wake, settling, first complete round, second wake, second
+   complete round and saved status (ten successful requests without retries). Do
    not label a missing wake an unsupported table or an empty assignment.
 3. Let a separate read expire without wake. Verify no COUNT/READ was sent, no
    targets/groups were created and existing native Button 1 behavior remains.
