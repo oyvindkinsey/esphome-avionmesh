@@ -1370,8 +1370,8 @@ void AvionMeshHub::process_controller_events() {
         const bool local_report = dev->product_type == 91 && dev->ha_local_level;
         if (local_report ? !decode_local_dimmer_report(dev->product_type, parsed.opcode,
                                                        parsed.payload, parsed.payload_len, command)
-                         : !decode_controller_command(parsed.opcode, parsed.payload,
-                                                      parsed.payload_len, command))
+                         : !decode_controller_command(dev->product_type, parsed.opcode,
+                                                      parsed.payload, parsed.payload_len, command))
             continue;
         auto now = esphome::millis();
         if (!controller_duplicates_.accept(packet, now)) {
