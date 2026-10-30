@@ -96,6 +96,7 @@ foreach(profile_test IN ITEMS controller_events absolute_dimmer local_dimmer mes
 endforeach()
 
 # Exercise both released-library fallback and additive observer API glue.
+find_package(Threads REQUIRED)
 foreach(rx_mode IN ITEMS legacy observer)
     add_executable(test_controller_rx_${rx_mode} test_controller_rx.cpp)
     target_include_directories(test_controller_rx_${rx_mode} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${COMPONENT_DIR})
@@ -103,5 +104,6 @@ foreach(rx_mode IN ITEMS legacy observer)
     if(rx_mode STREQUAL "observer")
         target_compile_definitions(test_controller_rx_${rx_mode} PRIVATE AVIONMESH_TEST_RX_OBSERVER=1)
     endif()
+    target_link_libraries(test_controller_rx_${rx_mode} PRIVATE Threads::Threads)
     add_test(NAME controller_rx_${rx_mode} COMMAND test_controller_rx_${rx_mode})
 endforeach()

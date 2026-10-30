@@ -63,7 +63,14 @@ int main() {
         ctx.mtl.rx_cb(payload, 23);
     assert(native_calls == 66 && queue.dropped() == 3); // Overflow cannot suppress native RX.
 #endif
-    while (queue.pop(packet)) {}
+    queue.clear();
+    assert(!queue.pop(packet) && queue.dropped() == 3);
+    queue_controller_observation(queue, {272, 0x8123, 111, 0x73, payload, 23}, 100);
+    queue.clear(); // A mesh-key change must not replay a snapshot authenticated with the old key.
+    assert(!queue.pop(packet));
+    queue_controller_observation(queue, {272, 0x8124, 222, 0x73, payload, 23}, 200);
+    assert(queue.pop(packet) && parse_controller_observation(packet, parsed));
+    assert(parsed.sequence == 222 && parsed.crypto_source == 0x8124);
     // Producer and consumer may run on BLE/main-loop threads. Metadata must not tear.
     std::atomic<bool> done{false};
     std::thread producer([&] {

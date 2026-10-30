@@ -38,7 +38,10 @@ identity. Duplicate keys now use all authenticated metadata plus payload rather
 than ciphertext; differences in receipt time do not turn retransmissions into
 new events. Existing freshness, reconnect epochs, bounded processing (eight
 records per loop), offline discard, and model/programming gates are unchanged.
-Neither the new API nor the queue adds an unbounded replay buffer.
+Neither the new API nor the queue adds an unbounded replay buffer. Crypto
+reinitialization (including failure) and factory reset clear the queue under its
+mutex: an old authenticated snapshot cannot be checked against the new mesh key.
+The drop counter remains cumulative across that explicit queue clear.
 
 Offline fixtures exercise both compile-time paths. The legacy case checks the
 original handler is still invoked when the queue fills. The observer case checks

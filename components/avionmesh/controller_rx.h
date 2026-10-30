@@ -16,6 +16,9 @@ struct ControllerObservation {
 };
 inline constexpr size_t CONTROLLER_OBSERVATION_HEADER = 9;
 inline constexpr size_t CONTROLLER_OBSERVATION_MAX_PAYLOAD = 23;
+static_assert(csrmesh::MTL_MAX_PACKET == ControllerPacketQueue::MAX_PACKET);
+static_assert(CONTROLLER_OBSERVATION_MAX_PAYLOAD ==
+              csrmesh::MTL_MAX_PACKET - csrmesh::MCP_CRYPTO_OVERHEAD - csrmesh::MCP_HEADER_LEN);
 static_assert(CONTROLLER_OBSERVATION_HEADER + CONTROLLER_OBSERVATION_MAX_PAYLOAD <=
               ControllerPacketQueue::MAX_PACKET);
 

@@ -125,6 +125,11 @@ class ControllerPacketQueue {
         --count_;
         return true;
     }
+    // Authenticated snapshots belong to the current mesh key only.
+    void clear() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        head_ = count_ = 0;
+    }
     uint32_t dropped() {
         std::lock_guard<std::mutex> lock(mutex_);
         return dropped_;

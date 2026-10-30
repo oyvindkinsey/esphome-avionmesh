@@ -378,6 +378,8 @@ void AvionMeshHub::on_disconnected() {
 /* ---- Crypto initialization ---- */
 
 bool AvionMeshHub::init_crypto() {
+    // A copied authenticated observation cannot be rechecked against a new key.
+    controller_packets_.clear();
     if (db_.passphrase().empty()) {
         ESP_LOGW(TAG, "Cannot init crypto: no passphrase");
         return false;
@@ -2399,7 +2401,8 @@ void AvionMeshHub::handle_factory_reset() {
         discovery_.remove_light(grp.group_id);
     }
 
-    /* Clear mesh context by reinitializing */
+    /* Clear mesh context and observations authenticated with its old key. */
+    controller_packets_.clear();
     std::memset(&mesh_ctx_, 0, sizeof(mesh_ctx_));
     mesh_initialized_ = false;
     crypto_initialized_ = false;
