@@ -695,6 +695,11 @@ void AvionMeshHub::process_deferred_actions() {
                         ESP_LOGI(TAG, "Crypto initialized with imported passphrase");
                     }
 
+                    // One NVS commit for the whole import: per-item commits
+                    // plus a blocked loop previously tripped the watchdog and
+                    // rebooted mid-import on large payloads.
+                    db_.begin_batch();
+
                     JsonArray devices = root["devices"];
                     for (JsonObject dev : devices) {
                         uint16_t device_id = dev["device_id"] | 0u;
@@ -707,6 +712,7 @@ void AvionMeshHub::process_deferred_actions() {
 
                         db_.add_device(device_id, product_type, name);
                         added_devices++;
+                        esphome::App.feed_wdt();
                     }
 
                     JsonArray groups = root["groups"];
@@ -730,7 +736,10 @@ void AvionMeshHub::process_deferred_actions() {
                                 do_mesh_send(cmd);
                             }
                         }
+                        esphome::App.feed_wdt();
                     }
+
+                    db_.end_batch();
                     return true;
                 });
 

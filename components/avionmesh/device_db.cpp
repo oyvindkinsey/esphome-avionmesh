@@ -99,7 +99,18 @@ void DeviceDB::load() {
 #endif
 }
 
+void DeviceDB::begin_batch() {
+    batch_mode_ = true;
+}
+
+void DeviceDB::end_batch() {
+    batch_mode_ = false;
+    save();
+}
+
 void DeviceDB::save() {
+    if (batch_mode_)
+        return;
 #ifdef USE_ESP32
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)

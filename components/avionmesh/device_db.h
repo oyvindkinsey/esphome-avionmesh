@@ -27,6 +27,11 @@ class DeviceDB {
     void save();
     void clear();
 
+    // Batch mode: mutators skip their per-call save() while set; end_batch()
+    // writes once. Used by bulk import to avoid hundreds of NVS commits.
+    void begin_batch();
+    void end_batch();
+
     bool add_device(uint16_t avion_id, uint8_t product_type, const std::string &name);
     bool remove_device(uint16_t avion_id);
     DeviceEntry *find_device(uint16_t avion_id);
@@ -50,6 +55,7 @@ class DeviceDB {
     std::vector<DeviceEntry> devices_;
     std::vector<GroupEntry> groups_;
     std::string passphrase_;
+    bool batch_mode_{false};
 };
 
 }  // namespace avionmesh
