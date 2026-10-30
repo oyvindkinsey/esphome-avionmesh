@@ -468,14 +468,7 @@ void AvionMeshHub::loop() {
     process_deferred_actions();
     process_capture();
     process_controller_events();
-    const auto *read_device =
-        controller_read_active_ ? db_.find_device(controller_read_target_) : nullptr;
-    // Battery receive windows are short. A missed mapping READ can be retried
-    // safely while still awake; programming retains its separate one-attempt timeout.
-    const uint32_t read_timeout_ms =
-        controller_read_probe_                                                       ? 2500
-        : binding_refresh_active_ && read_device && read_device->product_type == 126 ? 750
-                                                                                     : 8000;
+    const uint32_t read_timeout_ms = controller_read_timeout_ms();
     if (controller_read_active_ &&
         (!mesh_initialized_ ||
          static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) >= read_timeout_ms)) {
@@ -1311,23 +1304,8 @@ void AvionMeshHub::process_controller_events() {
         auto *dev = db_.find_device(decrypted.source);
         if (!dev || !is_controller(dev->product_type))
             continue;
-        if (dev->product_type == 126 &&
-            battery_keypad_wake_packet(parsed.opcode, parsed.payload, parsed.payload_len,
-                                       packet.received_ms, esphome::millis())) {
-            if (keypad_setup_active_ && keypad_setup_target_ == decrypted.source &&
-                keypad_setup_phase_ == KeypadSetupPhase::WaitWake) {
-                keypad_setup_phase_ = KeypadSetupPhase::Baseline;
-                keypad_setup_status_[decrypted.source] = "reading_assignments";
-                keypad_setup_emit();
-            }
-            if (binding_refresh_active_ && binding_refresh_target_ == decrypted.source &&
-                binding_refresh_waiting_wake_) {
-                binding_refresh_waiting_wake_ = false;
-                binding_refresh_wait_since_ms_ = esphome::millis();
-                binding_refresh_status_[decrypted.source] = "reading";
-                do_sse_emit("controller_buttons", controller_bindings_json(decrypted.source));
-            }
-        }
+        handle_battery_keypad_wake(decrypted.source, parsed.opcode, parsed.payload,
+                                  parsed.payload_len, packet.received_ms);
         if (controller_program_active_ &&
             static_cast<int32_t>(packet.received_ms - controller_program_since_ms_) >= 0 &&
             controller_program_reply_matches(controller_program_target_,
@@ -1368,7 +1346,8 @@ void AvionMeshHub::process_controller_events() {
         }
         if (controller_read_active_ &&
             static_cast<int32_t>(packet.received_ms - controller_read_since_ms_) >= 0 &&
-            static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) < 8000 &&
+            static_cast<uint32_t>(esphome::millis() - controller_read_since_ms_) <
+                controller_read_timeout_ms() &&
             (controller_read_probe_
                  ? controller_probe_reply_matches(controller_read_target_, controller_probe_noun_,
                                                   controller_probe_count_, decrypted.source,
@@ -1920,7 +1899,9 @@ void AvionMeshHub::on_mqtt_command(const std::string &payload) {
                     response["action"] = "controller_program";
                     response["status"] = "error";
                     response["request_id"] = root["request_id"] | 0u;
-                    response["message"] = "unsupported_busy_stale_or_unreserved_target";
+                    response["message"] = dev && dev->product_type == 126
+                                              ? "programming_unverified"
+                                              : "unsupported_busy_stale_or_unreserved_target";
                 });
                 send_response(response);
             } else {

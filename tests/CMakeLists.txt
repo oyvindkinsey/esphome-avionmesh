@@ -66,6 +66,7 @@ set(SOURCES
     test_upstream_integration.cpp
     test_controller_readiness.cpp
     test_controller_memory.cpp
+    test_battery_keypad_lifecycle.cpp
 )
 
 add_executable(avionmesh_tests ${SOURCES})

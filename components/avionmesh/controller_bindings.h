@@ -26,6 +26,13 @@ inline bool valid_binding_records(const ControllerSlotRecords &records) {
     }
     return true;
 }
+inline uint8_t binding_assigned_count(const ControllerSlotRecords &records) {
+    uint8_t count = 0;
+    for (const auto &record : records)
+        if (binding_target(record) != 65535 || record[6] || record[7])
+            ++count;
+    return count;
+}
 inline bool keypad_assignment_model_supported(uint8_t product) {
     return product == 127 || product == 126;
 }
@@ -42,9 +49,10 @@ inline const char *keypad_programming_status(uint8_t product) {
 // source packet at the call site; cached or ordinary brightness packets do not arm reads.
 inline bool battery_keypad_wake_packet(uint8_t opcode, const uint8_t *payload, size_t length,
                                        uint32_t received, uint32_t now) {
-    static constexpr std::array<uint8_t, 7> observed{0x0b, 0x1c, 1, 0x0b, 5, 100, 1};
-    return opcode == 0x73 && payload && length == observed.size() &&
-           std::equal(observed.begin(), observed.end(), payload) &&
+    // Only the observed seven-byte shape and header are classified. Trailing
+    // field meanings (including 0x64) are unknown and may vary with device state.
+    // This opens read-only queries; it never authorizes assignment writes.
+    return opcode == 0x73 && payload && length == 7 && payload[0] == 0x0b && payload[1] == 0x1c &&
            static_cast<uint32_t>(now - received) <= 1000;
 }
 inline const char *binding_slot_status(const ControllerBindingSnapshot *snapshot, uint8_t product,

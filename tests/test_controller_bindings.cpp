@@ -94,7 +94,7 @@ int main() {
         auto changed = std::array<uint8_t, 7>{};
         std::copy_n(wake, 7, changed.begin());
         changed[i] ^= 1;
-        assert(!battery_keypad_wake_packet(0x73, changed.data(), 7, 1000, 1100));
+        assert(battery_keypad_wake_packet(0x73, changed.data(), 7, 1000, 1100) == (i >= 2));
     }
     assert(battery_keypad_wake_packet(0x73, wake, 7, UINT32_MAX - 50, 49));
     assert(!battery_keypad_wake_packet(0x73, wake, 7, 1101, 1100));

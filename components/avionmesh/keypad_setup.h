@@ -14,11 +14,7 @@ struct KeypadSetupPlan {
     bool needs_review{false};
 };
 inline uint8_t keypad_assigned_count(const ControllerSlotRecords &records) {
-    uint8_t count = 0;
-    for (const auto &r : records)
-        if (binding_target(r) != 65535 || r[6] || r[7])
-            ++count;
-    return count;
+    return binding_assigned_count(records);
 }
 
 inline bool plan_unused_keypad_buttons(uint16_t controller, const ControllerSlotRecords &records,

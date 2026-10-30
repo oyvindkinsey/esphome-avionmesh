@@ -78,6 +78,7 @@ void AvionMeshHub::start_controller_binding_refresh(uint16_t target) {
         return;
     }
     binding_refresh_target_ = target;
+    binding_refresh_product_ = dev->product_type;
     binding_refresh_mesh_tag_ = controller_mesh_tag(db_.passphrase());
     binding_refresh_round_ = binding_refresh_slot_ = binding_refresh_attempt_ = 0;
     binding_refresh_records_ = {};
@@ -92,9 +93,47 @@ void AvionMeshHub::start_controller_binding_refresh(uint16_t target) {
     publish_controller_actions(target);
     do_sse_emit("controller_buttons", controller_bindings_json(target));
 }
+void AvionMeshHub::handle_battery_keypad_wake(uint16_t source, uint8_t opcode,
+                                            const uint8_t *payload, size_t length,
+                                            uint32_t received) {
+    // Called only after the receive path authenticates source. A queued packet
+    // from before the user's read request must not open a new receive window.
+    const auto *device = db_.find_device(source);
+    if (!device || device->product_type != 126 ||
+        !battery_keypad_wake_packet(opcode, payload, length, received, esphome::millis()))
+        return;
+    if (keypad_setup_active_ && keypad_setup_target_ == source &&
+        keypad_setup_phase_ == KeypadSetupPhase::WaitWake &&
+        static_cast<int32_t>(received - keypad_setup_wait_since_ms_) >= 0 &&
+        static_cast<uint32_t>(esphome::millis() - keypad_setup_wait_since_ms_) < 180000) {
+        keypad_setup_phase_ = KeypadSetupPhase::Baseline;
+        keypad_setup_status_[source] = "reading_assignments";
+        keypad_setup_emit();
+    }
+    if (binding_refresh_active_ && binding_refresh_target_ == source &&
+        binding_refresh_waiting_wake_ &&
+        static_cast<int32_t>(received - binding_refresh_wait_since_ms_) >= 0 &&
+        static_cast<uint32_t>(esphome::millis() - binding_refresh_wait_since_ms_) < 180000) {
+        binding_refresh_waiting_wake_ = false;
+        binding_refresh_wait_since_ms_ = esphome::millis();
+        binding_refresh_status_[source] = "reading";
+        do_sse_emit("controller_buttons", controller_bindings_json(source));
+    }
+}
+uint32_t AvionMeshHub::controller_read_timeout_ms() const {
+    const auto *device = db_.find_device(controller_read_target_);
+    // Mapping retries stay inside the short battery receive window. Diagnostic
+    // probes and programming retain their separate policies.
+    if (controller_read_probe_)
+        return 2500;
+    return binding_refresh_active_ && device && device->product_type == 126 ? 750 : 8000;
+}
 void AvionMeshHub::finish_controller_binding_refresh(const char *status) {
     binding_refresh_active_ = binding_refresh_waiting_ = false;
     binding_refresh_waiting_wake_ = false;
+    if (controller_read_active_ && controller_read_id_ == binding_refresh_request_ &&
+        controller_read_target_ == binding_refresh_target_)
+        report_controller_read("cancelled");
     binding_refresh_status_[binding_refresh_target_] = status;
     publish_controller_actions(binding_refresh_target_);
     do_sse_emit("controller_buttons", controller_bindings_json(binding_refresh_target_));
@@ -107,14 +146,18 @@ void AvionMeshHub::process_controller_binding_refresh() {
         finish_controller_binding_refresh("disconnected_or_mesh_changed");
         return;
     }
+    const auto *device = db_.find_device(binding_refresh_target_);
+    if (!device || device->product_type != binding_refresh_product_) {
+        finish_controller_binding_refresh("controller_removed_or_model_changed");
+        return;
+    }
     if (binding_refresh_waiting_wake_) {
         if (static_cast<uint32_t>(esphome::millis() - binding_refresh_wait_since_ms_) >= 180000)
             finish_controller_binding_refresh("wake_timeout_try_read_again");
         return;
     }
-    const auto *device = db_.find_device(binding_refresh_target_);
     // Let the keypad finish its wake announcement before the first request.
-    if (device && device->product_type == 126 &&
+    if (device->product_type == 126 &&
         static_cast<uint32_t>(esphome::millis() - binding_refresh_wait_since_ms_) < 150)
         return;
     if (binding_refresh_waiting_ || controller_read_active_)
@@ -147,7 +190,7 @@ void AvionMeshHub::binding_refresh_reply(const char *status, const uint8_t *payl
         return;
     binding_refresh_waiting_ = false;
     if (std::strcmp(status, "reply")) {
-        if (++binding_refresh_attempt_ <= 2 && mesh_initialized_)
+        if (!std::strcmp(status, "timeout") && ++binding_refresh_attempt_ <= 2 && mesh_initialized_)
             return;
         finish_controller_binding_refresh("read_failed");
         return;
@@ -155,13 +198,15 @@ void AvionMeshHub::binding_refresh_reply(const char *status, const uint8_t *payl
     binding_refresh_attempt_ = 0;
     if (!binding_refresh_slot_) {
         if (length != 5 || !payload || payload[0] != 4 || payload[1] != 0x30 || payload[2] ||
-            payload[4] != 4) {
+            payload[3] > 4 || payload[4] != 4) {
             finish_controller_binding_refresh("unsupported_count_record");
             return;
         }
         std::copy_n(payload, 5, binding_refresh_counts_[binding_refresh_round_].begin());
     } else {
-        if (!payload || length != 8) {
+        if (!payload ||
+            !controller_table_reply_matches(binding_refresh_target_, binding_refresh_slot_,
+                                             binding_refresh_target_, 0x73, payload, length)) {
             finish_controller_binding_refresh("invalid_slot_record");
             return;
         }
@@ -174,6 +219,12 @@ void AvionMeshHub::binding_refresh_reply(const char *status, const uint8_t *payl
             if (binding_refresh_counts_[0] != binding_refresh_counts_[1] ||
                 binding_refresh_records_[0] != binding_refresh_records_[1]) {
                 finish_controller_binding_refresh("assignments_changed_during_read");
+                return;
+            }
+            if (!valid_binding_records(binding_refresh_records_[0]) ||
+                binding_refresh_counts_[0][3] !=
+                    binding_assigned_count(binding_refresh_records_[0])) {
+                finish_controller_binding_refresh("count_does_not_match_assignments");
                 return;
             }
             const auto *device = db_.find_device(binding_refresh_target_);
