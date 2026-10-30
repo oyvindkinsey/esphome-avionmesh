@@ -7,6 +7,8 @@ namespace {
 class ReadinessHub : public TestHub {
  public:
     using AvionMeshHub::report_claim_result;
+    using AvionMeshHub::controller_input_status;
+    using AvionMeshHub::set_local_dimmer_mode;
     void baseline(uint16_t id) { controller_local_levels_[id].observe(1, 0, 1000, true); }
 };
 }
