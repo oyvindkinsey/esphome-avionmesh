@@ -17,6 +17,18 @@ const PRODUCTS = [
 // to manual selection.
 const CSR_TO_PRODUCT = {18: 162, 19: 167};
 
+// (vendor_code, product_code) from UUID announces → Avi-on product type.
+// Vendor 20 is Leedarson; codes verified against the cloud product catalog.
+// Only ids present in PRODUCTS are mapped; anything else needs manual selection.
+const UUID_CATALOG = {
+  20: {4: 93, 5: 90, 6: 97, 8: 94, 10: 134, 13: 137, 18: 162, 19: 167},
+};
+
+function productName(v) {
+  const p = PRODUCTS.find(p => p.v === v);
+  return p ? p.n : 'Unknown';
+}
+
 const $ = id => document.getElementById(id);
 const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML };
 
@@ -357,8 +369,9 @@ function connectSSE() {
     const d = JSON.parse(e.data);
     $('btnUnassocScan').disabled = false;
     $('btnUnassocScan').textContent = 'Scan for New';
-    renderUnassoc(d.uuid_hashes || []);
-    feedLog('Unassoc scan: ' + (d.uuid_hashes?.length || 0) + ' found');
+    const devs = d.devices || (d.uuid_hashes || []).map(h => ({uuid_hash: h}));
+    renderUnassoc(devs);
+    feedLog('Unassoc scan: ' + devs.length + ' found');
   });
 
   evtSource.addEventListener('claim_result', e => {
@@ -579,21 +592,29 @@ async function startUnassocScan() {
   }
 }
 
-function renderUnassoc(hashes) {
+function renderUnassoc(devs) {
   $('unassocResults').classList.remove('hidden');
   const el = $('unassocList');
-  unassocHashes = hashes;
-  if (!hashes.length) {
+  unassocHashes = devs.map(d => d.uuid_hash);
+  if (!devs.length) {
     el.innerHTML = '<p class="empty">No unassociated devices found</p>';
     return;
   }
-  el.innerHTML = hashes.map((hash, i) => `<div class="row" id="unassocRow${i}">
-    <span class="mono">${hash}</span>
+  el.innerHTML = devs.map((d, i) => {
+    const suggested = (UUID_CATALOG[d.vendor_code] || {})[d.product_code] || 0;
+    const ident = (d.vendor_code !== undefined)
+      ? `<div style="font-size:.75em">Vendor ${d.vendor_code} · Product ${d.product_code}` +
+        (suggested ? ` · <span style="color:var(--ok)">${esc(productName(suggested))}</span>` : ' · pick type manually') +
+        `</div>`
+      : '';
+    return `<div class="row" id="unassocRow${i}">
+    <span class="mono">${d.uuid_hash}</span>
     <input placeholder="Name" id="cn${i}" style="width:100px">
-    ${productSelect(134)}
-    <button class="sm" id="claimBtn${i}" onclick="claimDev('${hash}',${i})">Claim</button>
+    ${productSelect(suggested || 134)}
+    ${ident}
+    <button class="sm" id="claimBtn${i}" onclick="claimDev('${d.uuid_hash}',${i})">Claim</button>
     <span id="claimMsg${i}" style="font-size:.8em"></span>
-  </div>`).join('');
+  </div>`; }).join('');
 }
 
 async function claimDev(hash, idx) {

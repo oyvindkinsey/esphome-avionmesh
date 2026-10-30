@@ -1073,31 +1073,53 @@ void AvionMeshHub::on_mqtt_command(const std::string &payload) {
     });
 }
 
+void decode_uuid_identity(const uint8_t *uuid, size_t uuid_len, uint8_t &vendor_code,
+                          uint8_t &product_code) {
+    if (uuid == nullptr || uuid_len < 10) {
+        vendor_code = 0;
+        product_code = 0;
+        return;
+    }
+    vendor_code = uuid[6];
+    // Product code is big-endian uuid[8..9]; known codes all fit in a byte.
+    product_code = (uuid[8] == 0) ? uuid[9] : 0;
+}
+
 void AvionMeshHub::handle_scan_unassociated() {
     ESP_LOGI(TAG, "Starting unassociated device scan...");
 
     scanning_unassociated_ = true;
-    scan_uuid_hashes_.clear();
+    scan_candidates_.clear();
 
     csrmesh::discover_start(
         mesh_ctx_, [this](const uint8_t *uuid, size_t uuid_len, uint32_t uuid_hash) {
-            scan_uuid_hashes_.push_back(uuid_hash);
+            ScanCandidate cand;
+            cand.uuid_hash = uuid_hash;
+            decode_uuid_identity(uuid, uuid_len, cand.vendor_code, cand.product_code);
+            scan_candidates_.push_back(cand);
+            ESP_LOGI(TAG, "Unassociated device hash=0x%08x vendor=%u product=%u", uuid_hash,
+                     cand.vendor_code, cand.product_code);
 
-            char buf[128];
+            char buf[160];
             snprintf(buf, sizeof(buf),
-                     "{\"action\":\"scan_unassociated\",\"uuid_hash\":\"0x%08x\"}", uuid_hash);
+                     "{\"action\":\"scan_unassociated\",\"uuid_hash\":\"0x%08x\","
+                     "\"vendor_code\":%u,\"product_code\":%u}",
+                     uuid_hash, cand.vendor_code, cand.product_code);
             send_response(buf);
         });
 
     this->set_timeout("scan_stop", 5000, [this]() {
         csrmesh::discover_stop(mesh_ctx_);
 
-        std::string json = "{\"uuid_hashes\":[";
-        for (size_t i = 0; i < scan_uuid_hashes_.size(); i++) {
+        std::string json = "{\"devices\":[";
+        for (size_t i = 0; i < scan_candidates_.size(); i++) {
             if (i > 0)
                 json += ",";
-            char buf[16];
-            snprintf(buf, sizeof(buf), "\"0x%08x\"", scan_uuid_hashes_[i]);
+            char buf[128];
+            const auto &c = scan_candidates_[i];
+            snprintf(buf, sizeof(buf),
+                     "{\"uuid_hash\":\"0x%08x\",\"vendor_code\":%u,\"product_code\":%u}",
+                     c.uuid_hash, c.vendor_code, c.product_code);
             json += buf;
         }
         json += "]}";

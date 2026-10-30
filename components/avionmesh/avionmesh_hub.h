@@ -51,6 +51,13 @@ struct DeviceState {
     bool color_temp_known{false};
 };
 
+// Vendor/product codes from a device UUID announce. Byte layout matches the
+// native app's decoder: uuid[6] is the vendor code, uuid[8..9] (big-endian)
+// is the product code — verified against the cloud product catalog
+// (e.g. vendor 20 + product 18 = MicroEdge, catalog id 162).
+void decode_uuid_identity(const uint8_t *uuid, size_t uuid_len, uint8_t &vendor_code,
+                          uint8_t &product_code);
+
 struct DiscoveredDevice {
     uint16_t device_id;
     uint8_t fw_major{0}, fw_minor{0}, fw_patch{0};
@@ -163,7 +170,12 @@ class AvionMeshHub : public esphome::Component {
 
     /* Unassociated scan state */
     bool scanning_unassociated_{false};
-    std::vector<uint32_t> scan_uuid_hashes_;
+    struct ScanCandidate {
+        uint32_t uuid_hash{0};
+        uint8_t vendor_code{0};
+        uint8_t product_code{0};
+    };
+    std::vector<ScanCandidate> scan_candidates_;
 
     /* Per-device cached state for complete MQTT publishes */
     std::map<uint16_t, DeviceState> device_states_;
