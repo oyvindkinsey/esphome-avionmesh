@@ -272,7 +272,7 @@ class AvionMeshHub : public esphome::Component {
                                     size_t length, uint32_t received);
     uint32_t controller_read_timeout_ms() const;
     bool controller_read_reply_is_current(uint16_t source, uint8_t opcode, const uint8_t *payload,
-                                           size_t length, uint32_t received) const;
+                                          size_t length, uint32_t received) const;
     void wait_for_battery_binding_wake(const char *reason);
     bool binding_refresh_waiting_wake_{false};
     uint8_t binding_refresh_product_{0};
