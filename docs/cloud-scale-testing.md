@@ -146,3 +146,48 @@ clang++ -std=c++20 -DUSE_ESP32 -DAVIONMESH_CLOUD_SCALE_TEST \
 /tmp/test_cloud_scale_nvs
 python3 tests/test_cloud_scale_tools.py
 ```
+
+## HTTP response bounds and deadline behavior
+
+The response-body limit is 262144 bytes. A chunk crossing it is rejected before
+append, failure stays sticky, and the first failure calls
+`esp_http_client_close()` to close the socket. Callback return values alone are
+not an abort mechanism in ESP-IDF 5.5.6: its `http_on_body()` ignores the event
+handler return. The close guard is set before calling close because the SDK
+synchronously emits DISCONNECTED. Terminal, error and finish callbacks never
+initiate another close. Client/parser cleanup occurs only after perform returns;
+`cancel_request` is not used because that API closes and reconnects.
+
+The three-minute job budget starts after the worker takes its credentials, before
+the clock wait. Initial socket timeout is at most the remaining budget or 15s.
+CONNECTED, HEADERS_SENT, completed-header and body-data events refresh that limit;
+the first such event at/after the deadline closes the socket. After perform and
+cleanup, the component checks its sticky failure flags and deadline again and
+requires complete HTTP framing before any JSON parsing or inventory merge. A
+syntactically valid JSON prefix from a truncated HTTP response cannot complete a
+job. Expiry is reported as `sync_timeout`; the size limit reports
+`cloud_response_too_large`.
+
+This is a checked job deadline, not a guaranteed wall-clock cancellation timer.
+A blocking SDK/DNS/TLS operation may return later than its requested timeout, and
+a server slowly trickling an unfinished HTTP header can avoid completed-header
+callbacks while resetting an inactivity timeout. This callback-based client
+cannot interrupt that phase at an absolute instant. It still refuses completion
+after the deadline. A strict all-phase wall-clock bound requires a separate
+transport/cancellation design; do not label the current deadline test as proving
+one. The synthetic data-trickle test proves active close when body callbacks
+continue past the budget, while the normal slow-server case proves inactivity
+timeout behavior. Hardware timing remains unmeasured.
+
+`test_cloud_http_bounds` is an SDK-independent policy fixture whose transport
+intentionally ignores callback return values. It exercises sticky size/deadline
+failure, exact cap and cap-plus-one, no appends after failure, one active close,
+synchronous terminal-event reentry, decreasing remaining-budget timeouts, body
+trickle expiry, and final rejection of truncated or late responses. Run offline:
+
+```sh
+clang++ -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -Icomponents/avionmesh tests/test_cloud_http_bounds.cpp \
+  -o /tmp/cloud-http-bounds-test
+/tmp/cloud-http-bounds-test
+```

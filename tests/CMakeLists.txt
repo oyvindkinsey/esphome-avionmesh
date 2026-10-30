@@ -145,3 +145,9 @@ target_include_directories(test_cloud_scale_nvs PRIVATE
 target_compile_definitions(test_cloud_scale_nvs PRIVATE USE_ESP32 AVIONMESH_CLOUD_SCALE_TEST)
 target_compile_options(test_cloud_scale_nvs PRIVATE -UNDEBUG)
 add_test(NAME cloud_scale_nvs COMMAND test_cloud_scale_nvs)
+
+# HTTP policy uses no SDK/network; the fake transport ignores callback errors.
+add_executable(test_cloud_http_bounds test_cloud_http_bounds.cpp)
+target_include_directories(test_cloud_http_bounds PRIVATE ${COMPONENT_DIR})
+target_compile_options(test_cloud_http_bounds PRIVATE -UNDEBUG)
+add_test(NAME cloud_http_bounds COMMAND test_cloud_http_bounds)

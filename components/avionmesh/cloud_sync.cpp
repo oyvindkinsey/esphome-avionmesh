@@ -1,4 +1,5 @@
 #include "cloud_sync.h"
+#include "cloud_http_bounds.h"
 
 #ifdef USE_ESP32
 #include <esp_http_client.h>
@@ -18,29 +19,37 @@ void erase_secret(std::string &value) {
         p[i] = 0;
     value.clear();
 }
-struct Response {
-    std::string body;
-    bool too_big{false};
-    int64_t deadline;
-};
 esp_err_t receive_http(esp_http_client_event_t *event) {
-    auto &r = *static_cast<Response *>(event->user_data);
-    if (esp_timer_get_time() > r.deadline)
-        return ESP_FAIL;
-    if (event->event_id == HTTP_EVENT_ON_DATA) {
-        if (event->data_len < 0 || r.body.size() + event->data_len > 262144) {
-            r.too_big = true;
-            return ESP_FAIL;
-        }
-        cloud_scale_memory("receive_before", r.body.size());
-        r.body.append(static_cast<const char *>(event->data), event->data_len);
-        cloud_scale_memory("receive_after", r.body.size());
+    auto &response = *static_cast<CloudHttpResponseBound *>(event->user_data);
+    CloudHttpEvent kind = CloudHttpEvent::Terminal;
+    switch (event->event_id) {
+        case HTTP_EVENT_ON_CONNECTED: kind = CloudHttpEvent::Connected; break;
+        case HTTP_EVENT_HEADERS_SENT: kind = CloudHttpEvent::HeadersSent; break;
+        case HTTP_EVENT_ON_HEADER: kind = CloudHttpEvent::Header; break;
+        case HTTP_EVENT_ON_DATA: kind = CloudHttpEvent::Data; break;
+        default: break;
     }
-    return ESP_OK;
+    const bool data_event = kind == CloudHttpEvent::Data;
+    if (data_event)
+        cloud_scale_memory("receive_before", response.body.size());
+    const bool accepted = handle_cloud_http_event(
+        response, kind, static_cast<const char *>(event->data), event->data_len,
+        esp_timer_get_time(),
+        [event](int timeout_ms) { esp_http_client_set_timeout_ms(event->client, timeout_ms); },
+        [event]() {
+            // IDF ignores ON_DATA handler errors. Close the transport itself;
+            // keep the client/parser alive until perform() unwinds and cleanup.
+            esp_http_client_close(event->client);
+        });
+    if (data_event)
+        cloud_scale_memory("receive_after", response.body.size());
+    return accepted ? ESP_OK : ESP_FAIL;
 }
 bool fetch_cloud(const std::string &path, const std::string &token, const std::string *login,
                  JsonDocument &doc, std::string &error, int64_t deadline) {
-    if (esp_timer_get_time() > deadline) {
+    CloudHttpResponseBound response(deadline);
+    const int initial_timeout_ms = response.io_timeout_ms(esp_timer_get_time());
+    if (!initial_timeout_ms) {
         error = "sync_timeout";
         return false;
     }
@@ -50,7 +59,6 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
 #else
     const std::string url = "https://api.avi-on.com/" + path;
 #endif
-    Response response{{}, false, deadline};
     esp_http_client_config_t config{};
     config.url = url.c_str();
 #ifdef AVIONMESH_CLOUD_SCALE_TEST
@@ -60,7 +68,7 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
 #endif
     config.disable_auto_redirect = true;
     config.max_authorization_retries = -1;  // Token auth only; no HTTP auth negotiation.
-    config.timeout_ms = 15000;
+    config.timeout_ms = initial_timeout_ms;
     config.event_handler = receive_http;
     config.user_data = &response;
     cloud_scale_memory("https_before");
@@ -84,8 +92,15 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
     auto result = esp_http_client_perform(client);
     cloud_scale_memory("https_received", response.body.size());
     const int status = esp_http_client_get_status_code(client);
+    const bool framing_complete = esp_http_client_is_complete_data_received(client);
     esp_http_client_cleanup(client);
     erase_secret(authorization);
+    const bool complete = response.complete(result == ESP_OK, framing_complete, esp_timer_get_time());
+    if (response.timed_out || response.too_big) {
+        error = response.timed_out ? "sync_timeout" : "cloud_response_too_large";
+        erase_secret(response.body);
+        return false;
+    }
     // ESP-IDF can return ESP_FAIL for a perfectly valid HTTP 401 when its
     // built-in HTTP auth negotiation is disabled. Classify the status first.
     if (status == 401 || status == 403 || (login && status == 400)) {
@@ -93,10 +108,10 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
         erase_secret(response.body);
         return false;
     }
-    if (result != ESP_OK || response.too_big) {
+    if (!complete) {
         ESP_LOGW("avionmesh.cloud", "HTTPS request failed (result=%s, status=%d)",
                  esp_err_to_name(result), status);
-        error = response.too_big ? "cloud_response_too_large" : "cloud_connection_failed";
+        error = "cloud_connection_failed";
         erase_secret(response.body);
         return false;
     }
