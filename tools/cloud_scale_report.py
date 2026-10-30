@@ -69,6 +69,7 @@ def request(server, context, path, login=False, timeout=2, credentials=None):
         data = encode(credentials or {"email": SYNTHETIC_EMAIL, "password": SYNTHETIC_PASSWORD})
     try:
         connection.request("POST" if login else "GET", "/" + path, data, headers)
+        tls = {"version": connection.sock.version(), "cipher": connection.sock.cipher()[0]}
         response = connection.getresponse()
         declared = response.getheader("Content-Length")
         if declared is not None:
@@ -82,7 +83,8 @@ def request(server, context, path, login=False, timeout=2, credentials=None):
             raise ValueError("cloud_response_too_large")
         if response.status not in (200, 201):
             raise ValueError(f"http_{response.status}")
-        return json.loads(body), {"path": path, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+        return json.loads(body), {"path": path, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
+                                  "tls": tls}
     finally:
         connection.close()
 
