@@ -180,16 +180,17 @@ struct Inventory {
 };
 void initial_sync(size_t device_count, size_t group_count, bool dense) {
     Inventory db;
+    const std::string tricky_name = "quoted \"name\" \\ path\nnewline\rreturn\ttab\x01\x1f café 灯 ";
     std::map<uint16_t, State> states;
     for (size_t i = 0; i < device_count; ++i) {
         const auto id = static_cast<uint16_t>(32768 + i);
-        db.devs.push_back({id, static_cast<uint8_t>(i % 5 ? 93 : 127), "Fixture device " + std::to_string(i), {}});
+        db.devs.push_back({id, static_cast<uint8_t>(i % 5 ? 93 : 127), tricky_name + "device " + std::to_string(i), {}});
         states[id] = {};
     }
     size_t expected_members = 0;
     for (size_t g = 0; g < group_count; ++g) {
         const auto id = static_cast<uint16_t>(256 + g);
-        GroupEntry group{id, "Fixture group " + std::to_string(g), {}};
+        GroupEntry group{id, tricky_name + "group " + std::to_string(g), {}};
         for (size_t i = 0; i < (dense ? device_count : size_t(4)); ++i) {
             auto &device = db.devs[i % device_count];
             group.member_ids.push_back(device.avion_id);
@@ -225,11 +226,16 @@ void initial_sync(size_t device_count, size_t group_count, bool dense) {
         JsonDocument doc;
         assert(!deserializeJson(doc, event.json));
         if (event.type == "devices")
-            for (JsonObjectConst device : doc["devices"].as<JsonArrayConst>())
-                assert(devices.insert(device["avion_id"].as<uint16_t>()).second);
+            for (JsonObjectConst device : doc["devices"].as<JsonArrayConst>()) {
+                const auto id = device["avion_id"].as<uint16_t>();
+                assert(devices.insert(id).second);
+                assert(device["name"].as<std::string>() == db.devs.at(id - 32768).name);
+            }
         if (event.type == "groups")
             for (JsonObjectConst group : doc["groups"].as<JsonArrayConst>()) {
-                assert(groups.insert(group["group_id"].as<uint16_t>()).second);
+                const auto id = group["group_id"].as<uint16_t>();
+                assert(groups.insert(id).second);
+                assert(group["name"].as<std::string>() == db.grps.at(id - 256).name);
                 members += group["members"].size();
             }
         if (event.type == "sync_complete") {

@@ -1,6 +1,7 @@
 #include "avionmesh_web.h"
 #include "avionmesh_hub.h"
 #include "sse_initial_sync.h"
+#include "json_string.h"
 #include "web_content.h"
 
 #include "esphome/core/log.h"
@@ -749,40 +750,6 @@ void AvionMeshWebHandler::handle_local_dimmer_mode(AsyncWebServerRequest *reques
     send_json(request, 200, "{\"status\":\"queued\"}");
 }
 
-namespace {
-// Minimal JSON string escaping for device/group names.
-void append_json_string(std::string &out, const std::string &s) {
-    out += '"';
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    out += '"';
-}
-}  // namespace
 
 void AvionMeshWebHandler::handle_export(AsyncWebServerRequest *request) {
     // The passphrase is always included: a backup without the key cannot

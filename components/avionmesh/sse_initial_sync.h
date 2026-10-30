@@ -1,5 +1,6 @@
 #pragma once
 #include "sse_sessions.h"
+#include "json_string.h"
 #include "controller_events.h"
 #include "controller_profile.h"
 #include <avionmesh/types.h>
@@ -39,9 +40,9 @@ void send_sse_initial_sync(SseSession *session, const DB &db, const States &stat
                     json += ",";
                 json += "{\"avion_id\":";
                 json += std::to_string(dev.avion_id);
-                json += ",\"name\":\"";
-                json += dev.name;
-                json += "\",\"product_type\":";
+                json += ",\"name\":";
+                append_json_string(json, dev.name);
+                json += ",\"product_type\":";
                 json += std::to_string(dev.product_type);
                 json += ",\"product_name\":\"";
                 json += is_controller(dev.product_type) ? controller_name(dev.product_type)
@@ -126,9 +127,9 @@ void send_sse_initial_sync(SseSession *session, const DB &db, const States &stat
                     json += ",";
                 json += "{\"group_id\":";
                 json += std::to_string(grp.group_id);
-                json += ",\"name\":\"";
-                json += grp.name;
-                json += "\",\"members\":[";
+                json += ",\"name\":";
+                append_json_string(json, grp.name);
+                json += ",\"members\":[";
                 for (size_t m = 0; m < grp.member_ids.size(); m++) {
                     if (m > 0)
                         json += ",";
