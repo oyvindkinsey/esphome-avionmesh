@@ -3,11 +3,14 @@
 
 import argparse
 import json
+import os
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-API = "https://api.avi-on.com/"
+# Overridable for testing against tools/fake_cloud.py, e.g.
+# AVION_API_BASE=http://127.0.0.1:8077/
+API = os.environ.get("AVION_API_BASE", "https://api.avi-on.com/")
 
 
 def api_request(path, body=None, auth_token=None):
