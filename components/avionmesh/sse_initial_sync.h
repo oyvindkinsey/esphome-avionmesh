@@ -9,11 +9,10 @@
 namespace avionmesh {
 // Shared production serializer/cursor, exercised with actual inventory fixtures.
 // Caller holds SseSessions' lock; one frame is enqueued per main-loop turn.
-template<typename DB, typename States, typename ControllerJson, typename InputStatus>
+template <typename DB, typename States, typename ControllerJson, typename InputStatus>
 void send_sse_initial_sync(SseSession *session, const DB &db, const States &states,
                            const std::string &meta, bool mesh_mqtt_exposed,
                            ControllerJson controller_json, InputStatus input_status) {
-
     if (!session->ready_for_sync())
         return;
 

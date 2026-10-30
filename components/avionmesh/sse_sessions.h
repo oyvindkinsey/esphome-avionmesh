@@ -76,7 +76,7 @@ class SseSession {
     unsigned timeouts_{0};
     bool closing_{false}, close_queued_{false};
 
-    template<typename Send, typename Close>
+    template <typename Send, typename Close>
     void drain(Send send, Close close_socket, int timeout_error) {
         if (released())
             return;
@@ -126,7 +126,7 @@ class SseSessions {
         sessions_.push_back(session);
         return session;
     }
-    template<typename Visit>
+    template <typename Visit>
     void visit(Visit visit) {
         std::lock_guard<std::mutex> lock(mutex_);
         collect();
@@ -141,7 +141,7 @@ class SseSessions {
     }
     // Queue submission may fail when HTTPD is stopping or its mailbox is full.
     // No allocated work argument is transferred; caller retries on a later turn.
-    template<typename Queue>
+    template <typename Queue>
     void schedule(uintptr_t server, Queue queue) {
         if (!server) {
             work_queued_.store(false);
@@ -151,11 +151,12 @@ class SseSessions {
             work_queued_.store(false);
     }
     void finish_work() { work_queued_.store(false); }
-    template<typename Send, typename Close>
+    template <typename Send, typename Close>
     void drain(Send send, Close close, int timeout_error) {
         // Called by a queued HTTPD work callback, never the main-loop producer.
         visit([&](SseSession &session) { session.drain(send, close, timeout_error); });
     }
+
  private:
     void collect() {
         for (auto it = sessions_.begin(); it != sessions_.end();) {

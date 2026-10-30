@@ -75,12 +75,14 @@ void AvionMeshWebHandler::sse_free_context(void *ptr) {
     delete static_cast<SseContext *>(ptr);
 }
 
-int AvionMeshWebHandler::nonblocking_send(httpd_handle_t, int fd, const char *buf, size_t len, int) {
+int AvionMeshWebHandler::nonblocking_send(httpd_handle_t, int fd, const char *buf, size_t len,
+                                          int) {
     if (!buf)
         return HTTPD_SOCK_ERR_INVALID;
     const int result = ::send(fd, buf, len, MSG_DONTWAIT);
     if (result < 0)
-        return errno == EAGAIN || errno == EWOULDBLOCK ? HTTPD_SOCK_ERR_TIMEOUT : HTTPD_SOCK_ERR_FAIL;
+        return errno == EAGAIN || errno == EWOULDBLOCK ? HTTPD_SOCK_ERR_TIMEOUT
+                                                       : HTTPD_SOCK_ERR_FAIL;
     return result;
 }
 
@@ -93,8 +95,9 @@ void AvionMeshWebHandler::sse_drain_work(void *arg) {
         },
         [](const SseSession &session) {
             return httpd_sess_trigger_close(reinterpret_cast<httpd_handle_t>(session.server),
-                                             session.fd) == ESP_OK;
-        }, HTTPD_SOCK_ERR_TIMEOUT);
+                                            session.fd) == ESP_OK;
+        },
+        HTTPD_SOCK_ERR_TIMEOUT);
     handler->sse_sessions_.finish_work();
 }
 
@@ -107,7 +110,8 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
     snprintf(meta, sizeof(meta), "{\"ble_state\":%u,\"mesh_initialized\":%s,\"rx_count\":%u}",
              static_cast<uint8_t>(hub_->ble_state_), hub_->mesh_initialized_ ? "true" : "false",
              static_cast<unsigned>(hub_->rx_count_));
-    send_sse_initial_sync(session, hub_->db_, hub_->device_states_, meta, hub_->mesh_mqtt_exposed_,
+    send_sse_initial_sync(
+        session, hub_->db_, hub_->device_states_, meta, hub_->mesh_mqtt_exposed_,
         [this](uint16_t id) { return hub_->controller_bindings_json(id); },
         [this](uint16_t id) { return hub_->controller_input_status(id); });
 }
@@ -129,7 +133,8 @@ void AvionMeshWebHandler::sse_loop() {
     // All socket I/O, session lookup and asynchronous close scheduling run on
     // HTTPD's task, serialized with its native socket/context cleanup.
     sse_sessions_.schedule(reinterpret_cast<uintptr_t>(server), [this](uintptr_t handle) {
-        return httpd_queue_work(reinterpret_cast<httpd_handle_t>(handle), sse_drain_work, this) == ESP_OK;
+        return httpd_queue_work(reinterpret_cast<httpd_handle_t>(handle), sse_drain_work, this) ==
+               ESP_OK;
     });
     if (did_sync && hub_->mesh_initialized_) {
         const uint32_t now = esphome::millis();
@@ -301,8 +306,8 @@ void AvionMeshWebHandler::handle_index(AsyncWebServerRequest *request) {
 void AvionMeshWebHandler::handle_events(AsyncWebServerRequest *request) {
     httpd_req_t *req = *request;
 
-    auto session = sse_sessions_.accept(reinterpret_cast<uintptr_t>(req->handle),
-                                         httpd_req_to_sockfd(req));
+    auto session =
+        sse_sessions_.accept(reinterpret_cast<uintptr_t>(req->handle), httpd_req_to_sockfd(req));
     if (!session) {
         send_error(request, 503, "too_many_event_streams");
         return;
@@ -749,7 +754,6 @@ void AvionMeshWebHandler::handle_local_dimmer_mode(AsyncWebServerRequest *reques
     }
     send_json(request, 200, "{\"status\":\"queued\"}");
 }
-
 
 void AvionMeshWebHandler::handle_export(AsyncWebServerRequest *request) {
     // The passphrase is always included: a backup without the key cannot

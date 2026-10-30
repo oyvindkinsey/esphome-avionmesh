@@ -13,7 +13,6 @@ namespace avionmesh {
 class AvionMeshHub;
 
 class AvionMeshWebHandler : public AsyncWebHandler {
-
  public:
     AvionMeshWebHandler(AvionMeshHub *hub) : hub_(hub) {}
 
