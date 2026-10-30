@@ -6,6 +6,14 @@ For wired scene keypad model 127, claim or a disabled-to-enabled HA transition q
 
 Buttons 1-4 receive named HA events/device triggers only when their target is distinct and the map is verified. On/Off/Raise/Lower refer to the currently selected native target. Native assignments retain direct control; empty targets can be automated in HA to mix both modes.
 
+## Mixed native and Home Assistant buttons
+
+A wired keypad can use both paths at once. For example, Button 1 can keep its existing Avi-on group assignment and control those lights directly, while Buttons 2-4 can use empty event targets and trigger Home Assistant automations. Enabling HA command events also reports commands from natively assigned buttons, so an HA automation on Button 1 would run **in addition to** its direct lighting action.
+
+In the mesh web UI (`/ui`), claim the wired keypad or enable **HA command events** on an imported one. The bridge automatically sets up verified unused slots; **Read button assignments** refreshes the four-slot map, and **Set up unused HA buttons** retries that setup. Each ready slot is shown with its native group or HA automation target. In Home Assistant, use the keypad's **Button 1** through **Button 4** event entities or device triggers to create automations for the HA-targeted buttons. On/Off/Raise/Lower have separate event entities and device triggers; they act in the context of the last selected target rather than as independent button assignments.
+
+The current mesh UI does **not** provide a per-button selector for a native group versus an HA target, change an occupied native assignment, or turn an occupied slot into an HA-only slot. It only provisions unused slots and displays the readback. Native group assignments and clearing existing assignments still need the HALO/Avi-on app. This is a remaining gap for app-free commissioning, even though mixed native/HA operation works once the assignments exist.
+
 Accessory Dimmer model 91 claimed locally starts in HA local-level mode and uses silent tagged reads to establish a baseline. Existing native dimmers are not converted automatically. An explicit input-mode toggle selects local reports without writing physical assignments. Anywhere touch-slider model 81 reports absolute brightness and inferred direction while native group commands are visible. Neither model receives speculative keypad-table writes.
 
 Battery scene keypad model 126 retains passive event decoding and wake-aware assignment reads. Programming writes for that model are disabled in this public draft pending further hardware verification. Preset scenes sharing one target cannot reliably identify four physical buttons.
