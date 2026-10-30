@@ -1165,16 +1165,13 @@ std::string AvionMeshHub::controller_input_status(uint16_t target) const {
     const auto *dev = db_.find_device(target);
     if (!dev || !is_controller(dev->product_type))
         return "unsupported";
+    if (dimmer_profile(dev->product_type).supported) {
+        const auto found = controller_local_levels_.find(target);
+        const bool ready = found != controller_local_levels_.end() && found->second.ready();
+        return dimmer_input_status(dev->product_type, dev->mqtt_exposed, dev->ha_local_level, ready);
+    }
     if (!dev->mqtt_exposed)
         return "disabled";
-    if (dev->product_type == 91 && dev->ha_local_level) {
-        const auto found = controller_local_levels_.find(target);
-        return found != controller_local_levels_.end() && found->second.ready()
-                   ? "ready_local_reports"
-                   : "waiting_for_baseline";
-    }
-    if (dev->product_type == 81 || dev->product_type == 91)
-        return "native_commands";
     const auto status = keypad_setup_status(target);
     if (status != "not_requested")
         return status;
@@ -1192,22 +1189,26 @@ void AvionMeshHub::set_local_dimmer_mode(uint16_t target, bool enabled) {
                 d.ha_local_level = enabled;
         saved = db_.replace_inventory_metadata(std::move(devices), db_.groups());
     }
+    if (saved) {
+        controller_local_levels_.erase(target);
+        controller_dimmer_levels_.erase(target);
+    }
     const auto result = esphome::json::build_json([&](JsonObject root) {
         root["action"] = "set_local_dimmer_mode";
         root["avion_id"] = target;
         root["status"] = saved ? "ok" : "error";
         root["saved"] = saved;
-        if (saved)
+        if (saved) {
             root["enabled"] = enabled;
-        else
+            root["ha_input_status"] = controller_input_status(target);
+            root["ha_native_assignment_status"] = "unknown";
+        } else
             root["message"] = valid ? "save_failed" : "accessory_dimmer_required";
     });
     send_response(result);
     do_sse_emit("controller_input_mode", result);
     if (!saved)
         return;
-    controller_local_levels_.erase(target);
-    controller_dimmer_levels_.erase(target);
     publish_controller_actions(target);
 #ifdef USE_ESP32
     if (web_handler_)
@@ -1523,7 +1524,8 @@ void AvionMeshHub::process_controller_events() {
                 publish_action(direction.action, false, true);
             // A dedicated slider-level event avoids numeric-target filtering
             // in HA. Older sequence packets remain in the unchanged legacy stream.
-            if ((dev->product_type == 81 || local_report) && command.absolute && direction.accepted)
+            if (dimmer_profile(dev->product_type).absolute_brightness && command.absolute &&
+                direction.accepted)
                 publish_action("brightness", false);
         } else {
             ++controller_events_failed_;
@@ -2070,6 +2072,18 @@ void AvionMeshHub::report_claim_result(bool success, uint16_t device_id, const c
         root["action"] = "claim_device";
         root["status"] = success ? "ok" : "error";
         root["device_id"] = device_id;
+        // Emit actual persisted settings after association, not claimed readiness.
+        const auto *dev = success ? db_.find_device(device_id) : nullptr;
+        if (dev && is_controller(dev->product_type)) {
+            root["mqtt_exposed"] = dev->mqtt_exposed;
+            root["ha_local_level"] = dev->ha_local_level;
+            root["ha_input_status"] = controller_input_status(device_id);
+            if (dimmer_profile(dev->product_type).supported) {
+                root["ha_input_mode"] = dimmer_input_mode(dev->product_type, dev->ha_local_level);
+                root["ha_native_assignment_status"] = "unknown";
+                root["ha_native_assignment_programming"] = false;
+            }
+        }
         if (message)
             root["message"] = message;
     });

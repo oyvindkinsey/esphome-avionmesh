@@ -1,4 +1,5 @@
 #include "mqtt_discovery.h"
+#include "controller_profile.h"
 #include "esphome/components/json/json_util.h"
 
 #ifdef USE_ESP32
@@ -211,16 +212,8 @@ void MqttDiscovery::publish_controller_actions(uint16_t avion_id, uint8_t produc
         const bool brightness = i == 8;
         if (button && product != 127 && product != 126)
             continue;
-        if (brightness && product != 81 && !(product == 91 && local_level)) {
-            // Remove this optional entity/trigger when an accessory switches
-            // back to native commands. Other controller layouts stay unchanged.
-            if (product == 91) {
-                publish_("homeassistant/event/" + identity + "_brightness/config", "", true);
-                publish_("homeassistant/device_automation/" + identity + "_brightness/config", "",
-                         true);
-            }
+        if (brightness && !dimmer_profile(product).absolute_brightness)
             continue;
-        }
         const uint8_t slot = i + 1;
         const std::string key = brightness ? "brightness"
                                 : button   ? "button_" + std::to_string(slot)

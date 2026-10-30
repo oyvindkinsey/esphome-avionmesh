@@ -23,7 +23,7 @@ struct DeviceEntry {
     std::vector<uint16_t> groups;
     bool mqtt_exposed{false};
     bool ha_setup_pending{false};
-    bool ha_local_level{false};  // Explicit HA-only model-91 level-report input.
+    bool ha_local_level{false};  // Selected model-91 report decoder; does not clear native assignments.
 };
 
 struct GroupEntry {

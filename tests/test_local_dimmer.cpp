@@ -70,6 +70,23 @@ int main() {
     assert(repeated.observe(15, 0, 6000).accepted);
     assert(!repeated.observe(15, 0, 6001).accepted);
     assert(!repeated.observe(16, 128, 7000, true).accepted && repeated.level() == 128);
+    // Reconnection clears all report history. A first physical report without
+    // a preceding query is conservatively consumed as the baseline, even Off
+    // at an unchanged endpoint. Readiness must not imply that action was emitted.
+    repeated = {};
+    assert(!repeated.ready());
+    assert(!repeated.observe(100, 0, 10000).accepted && repeated.ready());
+    assert(repeated.observe(101, 0, 10100).accepted);
+    // A tagged query can establish/refresh readiness silently. The first later
+    // physical action then emits, including an unchanged full-brightness report.
+    repeated = {};
+    assert(!repeated.observe(200, 255, 20000, true).accepted && repeated.ready());
+    again = repeated.observe(201, 255, 20100);
+    assert(again.accepted && !again.action);
+    assert(!repeated.observe(202, 0, 20200, true).accepted && repeated.level() == 0);
+    assert(repeated.observe(203, 0, 20300).accepted);
+    // A delayed tagged reply cannot roll back a newer baseline or cause an event.
+    assert(!repeated.observe(202, 255, 20400, true).accepted && repeated.level() == 0);
     uint8_t query[] = {1, 10, 0, 0, 0, 0, 0, 0, 0, 0};
     assert(is_untagged_dimming_query(0x73, query, 10));
     query[4] = 0xd0;

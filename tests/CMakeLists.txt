@@ -64,6 +64,7 @@ set(SOURCES
     test_uuid_identity.cpp
     test_db_batch.cpp
     test_upstream_integration.cpp
+    test_controller_readiness.cpp
     test_controller_memory.cpp
 )
 
@@ -88,7 +89,7 @@ include(GoogleTest)
 gtest_discover_tests(avionmesh_tests)
 
 # Protocol fixtures use standalone assertion executables; keep assertions enabled.
-foreach(profile_test IN ITEMS controller_events absolute_dimmer local_dimmer mesh_capture controller_discovery controller_tables controller_bindings keypad_setup keypad_setup_journal)
+foreach(profile_test IN ITEMS controller_profile controller_events absolute_dimmer local_dimmer mesh_capture controller_discovery controller_tables controller_bindings keypad_setup keypad_setup_journal)
     add_executable(test_${profile_test} test_${profile_test}.cpp ${COMPONENT_DIR}/controller_bindings.cpp ${COMPONENT_DIR}/keypad_setup_journal.cpp ${COMPONENT_DIR}/mqtt_discovery.cpp stubs/stubs.cpp)
     target_include_directories(test_${profile_test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${COMPONENT_DIR})
     target_compile_options(test_${profile_test} PRIVATE -UNDEBUG)

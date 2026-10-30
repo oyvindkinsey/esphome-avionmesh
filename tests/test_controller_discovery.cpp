@@ -117,14 +117,20 @@ int main() {
     assert(local_events == 5 && local_brightness && messages.size() == 10);
     messages.clear();
     discovery.publish_controller_actions(40004, 91, "Local dimmer", nullptr, false);
-    unsigned cleared = 0;
+    unsigned native_events = 0;
     for (const auto &[topic, payload, retained] : messages) {
-        if (payload.empty()) {
-            assert(topic.find("brightness/config") != std::string::npos);
-            ++cleared;
+        assert(retained && !payload.empty());
+        if (topic.rfind("homeassistant/event/", 0) == 0) {
+            ++native_events;
+            assert(!deserializeJson(doc, payload));
+            assert(doc["availability"].size() == 2);  // Native decoder needs no report baseline.
+            if (doc["name"] == "Brightness") {
+                assert(doc["unique_id"] == "test-bridge_40004_brightness");
+                assert(doc["state_topic"] == "test_bridge/controller/40004/action/brightness");
+            }
         }
     }
-    assert(cleared == 2);  // Reversible input mode removes its optional Brightness discovery.
+    assert(native_events == 5 && messages.size() == 10);  // Stable dimmer entities across modes.
     messages.clear();
     discovery.remove_controller(40001);
     assert(messages.size() == 28);

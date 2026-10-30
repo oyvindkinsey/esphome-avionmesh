@@ -99,7 +99,7 @@ function renderDevices() {
 function controllerCard(d) {
   const last = controllerEvents.get(d.avion_id);
   const inputLabels = {disabled:'HA events disabled', waiting_for_baseline:'Reading starting level…',
-    ready_local_reports:'Ready · local controller reports', native_commands:'Native command events'};
+    ready_local_reports:'Ready · local controller reports', native_commands:'Native command decoder selected'};
   const model = {91: 'Accessory Dimmer', 81: 'Anywhere Dimmer', 127: 'Wired Scene Keypad', 126: 'Battery Scene Keypad'}[d.product_type];
   return `<div class="card" data-controller="${d.avion_id}">
     <div class="card-name">${esc(d.name)} <a href="#" class="rename-link" onclick="renameDev(${d.avion_id});return false" title="Rename">✎</a></div>
@@ -112,10 +112,10 @@ function controllerCard(d) {
       </span>
       HA command events
     </label>
-    <p style="font-size:.82em;color:var(--dim)">${d.ha_local_level ? 'HA exposes named Brightness, On, Off, Raise and Lower controller report events.' : 'Native lighting assignments operate directly. HA exposes named On, Off, Raise and Lower command events.'}</p>
-    ${d.product_type === 91 ? `<label class="toggle-row"><span class="toggle"><input type="checkbox" ${d.ha_local_level ? 'checked' : ''} onchange="setLocalDimmerMode(${d.avion_id},this.checked,this)"><span class="knob"></span></span>HA-only level input</label>
-      <p style="font-size:.82em;color:var(--dim)">${d.ha_local_level ? 'Use Brightness to follow the unassigned dimmer’s local reports. Startup and query replies are ignored. Repeated On/Off reports are preserved; Raise/Lower follow level changes. These are not press/release gestures.' : 'Raise/Lower follow changes in native brightness commands. Holding a button can produce repeated events.'} Existing HALO assignments must be cleared separately before using HA-only input.</p>` : ''}
-    ${d.product_type === 81 ? '<p style="font-size:.82em;color:var(--dim)">Use the HA Brightness event to follow the touch slider’s level. Raise/Lower follow sliding direction; On/Off are the full-brightness and zero-level commands. Automatic target setup for an unassigned dimmer is still being developed.</p>' : ''}
+    <p style="font-size:.82em;color:var(--dim)">${[81,91].includes(d.product_type) ? 'HA exposes Brightness, On, Off, Raise and Lower from observed levels and commands. Native assignment state is unknown; assignment programming is not supported for this model.' : 'HA exposes named On, Off, Raise and Lower command events. Button events require verified assignment reads.'}</p>
+    ${d.product_type === 91 ? `<label class="toggle-row"><span class="toggle"><input type="checkbox" ${d.ha_local_level ? 'checked' : ''} onchange="setLocalDimmerMode(${d.avion_id},this.checked,this)"><span class="knob"></span></span>Local level reports</label>
+      <p style="font-size:.82em;color:var(--dim)">${d.ha_local_level ? 'Use Brightness to follow local reports from a separately confirmed unassigned dimmer. The first report after reconnect and query replies are silent. Repeated On/Off reports are preserved; Raise/Lower follow level changes. These are not press/release gestures.' : 'Raise/Lower follow changes in native brightness commands. Holding a button can produce repeated events.'} This selects an event decoder only; it does not read, clear or change HALO assignments or prove HA-only operation.</p>` : ''}
+    ${d.product_type === 81 ? '<p style="font-size:.82em;color:var(--dim)">Use the HA Brightness event to follow the touch slider’s level. Raise/Lower follow sliding direction; On/Off are the full-brightness and zero-level commands. Unassigned setup needs a spare-device capture; enabling HA events preserves existing native targets, including managed empty targets.</p>' : ''}
     ${controllerBindingsCard(d)}
     <p style="font-size:.82em">${last ? `Last ${last.input_source === 'local_level_report' ? 'input report' : 'command'}: ${esc(last.event_type)}${last.input_source === 'local_level_report' ? ' · local level' : last.target_id != null ? ` · ${esc(last.target_kind)} #${last.target_id}` : ''}` : 'No command observed in this browser session.'}</p>
     <div class="card-actions">
@@ -417,7 +417,10 @@ function connectSSE() {
   evtSource.addEventListener('controller_input_mode', e => {
     const result = JSON.parse(e.data);
     const device = devices.find(d => d.avion_id === result.avion_id);
-    if (device && result.saved) device.ha_local_level = result.enabled;
+    if (device && result.saved) {
+      device.ha_local_level = result.enabled;
+      device.ha_input_status = result.ha_input_status;
+    }
     renderDevices();
     feedLog(result.saved ? `Dimmer #${result.avion_id}: input mode saved` : `Dimmer input: ${result.message}`);
   });

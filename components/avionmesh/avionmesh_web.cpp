@@ -226,6 +226,12 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                 json += ",\"ha_input_status\":\"";
                 json += hub_->controller_input_status(dev.avion_id);
                 json += "\"";
+                if (dimmer_profile(dev.product_type).supported) {
+                    json += ",\"ha_input_mode\":\"";
+                    json += dimmer_input_mode(dev.product_type, dev.ha_local_level);
+                    json += "\",\"ha_native_assignment_status\":\"unknown\"";
+                    json += ",\"ha_native_assignment_programming\":false";
+                }
                 json += ",\"has_dimming\":";
                 json += has_dimming(dev.product_type) ? "true" : "false";
                 json += ",\"has_color_temp\":";

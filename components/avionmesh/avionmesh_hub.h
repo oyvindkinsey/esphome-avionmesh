@@ -8,6 +8,7 @@
 #include "keypad_setup_journal.h"
 #include "absolute_dimmer.h"
 #include "local_dimmer.h"
+#include "controller_profile.h"
 
 #include "esphome/core/component.h"
 #include "esphome/components/esp32_ble/ble.h"
