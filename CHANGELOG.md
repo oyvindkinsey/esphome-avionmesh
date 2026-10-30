@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Unassociated scan decodes vendor/product codes from the device UUID
+  announce and the Web UI preselects the device type at claim time
+  (verified against the cloud product catalog).
+- `scan_unassoc` events now report `devices[]` with `uuid_hash`,
+  `vendor_code`, and `product_code`; `discover_mesh` entries carry a
+  `short` flag for truncated ping replies.
+
 ### Changed
 
 - Move to ESPHome's native ESP-IDF toolchain (ESPHome >= 2026.9.0).
@@ -24,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replace `request->url()` with `url_to()` (removed API) and the
   `mbedtls/base64.h` dependency (removed in Mbed TLS 4) with a local
   base64 implementation.
+- Stop reading past the end of short ping replies during mesh discovery;
+  short replies are flagged and their fw/vendor/product fields stay zero
+  instead of showing garbage.
+- Bulk import batches NVS writes into a single commit and feeds the task
+  watchdog — large imports previously rebooted the device mid-way and
+  lost trailing groups.
 
 ## [1.0.0] - 2026-10-18
 

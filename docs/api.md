@@ -55,8 +55,8 @@ Emitted to all connected clients. An initial sync is sent to each new client on 
 | `group_updated` | `group_id`, `members` |
 | `state` | `avion_id`, `brightness`, `color_temp` (optional) |
 | `mesh_status` | `mesh_mqtt_exposed` |
-| `discover_mesh` | `devices[]` — each: `device_id`, `fw`, `vendor_id`, `csr_product_id`, `known` |
-| `scan_unassoc` | `uuid_hashes[]` |
+| `discover_mesh` | `devices[]` — each: `device_id`, `fw`, `vendor_id`, `csr_product_id`, `known`, `short` (true when the ping reply was too short to carry fw/vendor/product fields; the other fields are then zero) |
+| `scan_unassoc` | `devices[]` — each: `uuid_hash`, `vendor_code`, `product_code` (decoded from the UUID announce; the Web UI preselects the device type from these) |
 | `claim_result` | `status`, `device_id` (on success), `message` (on failure) |
 | `examine` | `avion_id`, `fw`, `vendor_id`, `csr_product_id`, `flags` — or `error` |
 | `import_result` | `added_devices`, `added_groups` |
