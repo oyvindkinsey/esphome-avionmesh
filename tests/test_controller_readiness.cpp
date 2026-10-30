@@ -6,12 +6,12 @@ using namespace avionmesh;
 namespace {
 class ReadinessHub : public TestHub {
  public:
-    using AvionMeshHub::report_claim_result;
     using AvionMeshHub::controller_input_status;
+    using AvionMeshHub::report_claim_result;
     using AvionMeshHub::set_local_dimmer_mode;
     void baseline(uint16_t id) { controller_local_levels_[id].observe(1, 0, 1000, true); }
 };
-}
+}  // namespace
 
 TEST(ControllerReadiness, ClaimResultUsesPersistedModeAndDoesNotPromiseAssignment) {
     ReadinessHub hub;
@@ -26,7 +26,8 @@ TEST(ControllerReadiness, ClaimResultUsesPersistedModeAndDoesNotPromiseAssignmen
         EXPECT_EQ(hub.sse_events.back().first, "claim_result");
         EXPECT_EQ(event["status"].as<std::string>(), "ok");
         EXPECT_TRUE(event["mqtt_exposed"].as<bool>());
-        EXPECT_EQ(event["ha_input_status"].as<std::string>(), id == 33001 ? "waiting_for_baseline" : "native_commands");
+        EXPECT_EQ(event["ha_input_status"].as<std::string>(),
+                  id == 33001 ? "waiting_for_baseline" : "native_commands");
         EXPECT_EQ(event["ha_local_level"].as<bool>(), id == 33001);
         EXPECT_EQ(event["ha_native_assignment_status"].as<std::string>(), "unknown");
         EXPECT_FALSE(event["ha_native_assignment_programming"].as<bool>());

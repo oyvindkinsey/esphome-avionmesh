@@ -7,9 +7,9 @@ namespace {
 constexpr uint16_t BATTERY = 40026;
 constexpr uint8_t WAKE[] = {0x0b, 0x1c, 1, 0x0b, 5, 100, 1};
 const ControllerSlotRecords BASELINE{{{{1, 0x30, 0, 1, 2, 0xf4, 8, 255}},
-                                       {{1, 0x30, 0, 2, 255, 255, 0, 0}},
-                                       {{1, 0x30, 0, 3, 255, 255, 0, 0}},
-                                       {{1, 0x30, 0, 4, 255, 255, 0, 0}}}};
+                                      {{1, 0x30, 0, 2, 255, 255, 0, 0}},
+                                      {{1, 0x30, 0, 3, 255, 255, 0, 0}},
+                                      {{1, 0x30, 0, 4, 255, 255, 0, 0}}}};
 class BatteryHub : public TestHub {
  public:
     BatteryHub() {
@@ -69,15 +69,15 @@ class BatteryHub : public TestHub {
         return doc;
     }
 };
-}
+}  // namespace
 
 TEST(BatteryKeypad, ReadRequiresRequestedAuthenticatedSourceWakeAndSettles) {
     BatteryHub hub;
     hub.start_controller_binding_refresh(BATTERY);
     hub.step(1100);
-    hub.wake(40027, 1100);  // Wrong product.
-    hub.wake(40028, 1100);  // A load never arms battery mapping.
-    hub.wake(BATTERY, 999); // Queued before request, despite packet freshness.
+    hub.wake(40027, 1100);   // Wrong product.
+    hub.wake(40028, 1100);   // A load never arms battery mapping.
+    hub.wake(BATTERY, 999);  // Queued before request, despite packet freshness.
     hub.step(1200);
     EXPECT_TRUE(hub.mesh_sends.empty());
     EXPECT_EQ(hub.status()["status"], "waiting_for_wake");
@@ -86,7 +86,7 @@ TEST(BatteryKeypad, ReadRequiresRequestedAuthenticatedSourceWakeAndSettles) {
     EXPECT_TRUE(hub.mesh_sends.empty());
     hub.step(1350);
     ASSERT_EQ(hub.mesh_sends.size(), 1u);
-    EXPECT_EQ(hub.mesh_sends[0].payload[0], 4); // COUNT only.
+    EXPECT_EQ(hub.mesh_sends[0].payload[0], 4);  // COUNT only.
     EXPECT_EQ(hub.timeout_ms(), 750u);
 }
 
@@ -94,7 +94,7 @@ TEST(BatteryKeypad, WakeTimeoutAndSleepRetriesNeverWriteOrReserveGroups) {
     BatteryHub hub;
     hub.start_controller_binding_refresh(BATTERY);
     esphome::set_test_millis(181000);
-    hub.wake(BATTERY, 181000); // A fresh packet cannot reopen the expired request.
+    hub.wake(BATTERY, 181000);  // A fresh packet cannot reopen the expired request.
     hub.step(181000);
     EXPECT_FALSE(hub.refreshing());
     EXPECT_EQ(hub.status()["status"], "wake_timeout_try_read_again");
@@ -109,14 +109,14 @@ TEST(BatteryKeypad, WakeTimeoutAndSleepRetriesNeverWriteOrReserveGroups) {
     }
     EXPECT_FALSE(hub.refreshing());
     EXPECT_EQ(hub.status()["status"], "read_failed");
-    ASSERT_EQ(hub.mesh_sends.size(), 3u); // Initial read plus two retries.
+    ASSERT_EQ(hub.mesh_sends.size(), 3u);  // Initial read plus two retries.
     for (const auto &command : hub.mesh_sends) {
         EXPECT_EQ(command.dest_id, BATTERY);
         EXPECT_EQ(command.payload[0], 4);
         EXPECT_EQ(command.payload[1], 0x30);
     }
     EXPECT_TRUE(hub.db().groups().empty());
-    hub.step(190000); // No silent auto-resume after sleep/timeouts.
+    hub.step(190000);  // No silent auto-resume after sleep/timeouts.
     EXPECT_EQ(hub.mesh_sends.size(), 3u);
 }
 
@@ -146,7 +146,7 @@ TEST(BatteryKeypad, MatchingFullBaselinePersistsNativeButtonButCannotEnableProgr
     restarted.start_controller_binding_refresh(BATTERY);
     EXPECT_FALSE(restarted.snapshot()->valid);
     restarted.step(1200);
-    EXPECT_TRUE(restarted.mesh_sends.empty()); // New read needs a new wake.
+    EXPECT_TRUE(restarted.mesh_sends.empty());  // New read needs a new wake.
 }
 
 TEST(BatteryKeypad, MatchingRoundsWithCountMismatchCannotSaveMapping) {
@@ -180,10 +180,14 @@ TEST(BatteryKeypad, DisconnectModelRemovalAndMeshChangeCancelOutstandingRead) {
         hub.wake();
         hub.step(1150);
         ASSERT_TRUE(hub.reading());
-        if (change == 0) hub.disconnected();
-        if (change == 1) hub.db().find_device(BATTERY)->product_type = 127;
-        if (change == 2) hub.db().set_passphrase("another-mesh");
-        if (change == 3) hub.db().remove_device(BATTERY);
+        if (change == 0)
+            hub.disconnected();
+        if (change == 1)
+            hub.db().find_device(BATTERY)->product_type = 127;
+        if (change == 2)
+            hub.db().set_passphrase("another-mesh");
+        if (change == 3)
+            hub.db().remove_device(BATTERY);
         hub.step(1200);
         EXPECT_FALSE(hub.refreshing());
         EXPECT_FALSE(hub.reading());
@@ -229,7 +233,8 @@ TEST(BatteryKeypad, MalformedCountAndSlotDoNotBecomeEmptyBaseline) {
         hub.wake();
         hub.step(1150);
         uint8_t count[]{4, 0x30, 0, 1, 4};
-        if (malformed == 0) count[3] = 5;
+        if (malformed == 0)
+            count[3] = 5;
         hub.reply(count, sizeof(count));
         if (malformed == 1) {
             hub.step(1150);
@@ -275,7 +280,8 @@ TEST(BatteryKeypad, DirectProgrammingRemainsRejectedAfterFreshReadAndOwnedEmptyT
     hub.feed_round();
     ASSERT_TRUE(hub.db().add_group(24574, "HA event target: 40026:2"));
     hub.clear_captures();
-    hub.on_mqtt_command(R"({"action":"controller_program","target":40026,"slot":2,"group_id":24574,"expected_record":"01300002ffff0000","request_id":99})");
+    hub.on_mqtt_command(
+        R"({"action":"controller_program","target":40026,"slot":2,"group_id":24574,"expected_record":"01300002ffff0000","request_id":99})");
     EXPECT_TRUE(hub.mesh_sends.empty());
     ASSERT_FALSE(hub.mqtt_publishes.empty());
     bool rejected = false;

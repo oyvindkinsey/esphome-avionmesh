@@ -265,7 +265,7 @@ class AvionMeshHub : public esphome::Component {
     void finish_controller_binding_refresh(const char *status);
     bool binding_refresh_active_{false}, binding_refresh_waiting_{false};
     void handle_battery_keypad_wake(uint16_t source, uint8_t opcode, const uint8_t *payload,
-                                   size_t length, uint32_t received);
+                                    size_t length, uint32_t received);
     uint32_t controller_read_timeout_ms() const;
     bool binding_refresh_waiting_wake_{false};
     uint8_t binding_refresh_product_{0};

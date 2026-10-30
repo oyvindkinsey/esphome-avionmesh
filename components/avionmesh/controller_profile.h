@@ -24,7 +24,7 @@ constexpr bool uses_local_dimmer_reports(uint8_t product, bool configured) {
 }
 
 inline const char *dimmer_input_status(uint8_t product, bool exposed, bool configured_local,
-                                      bool baseline_ready) {
+                                       bool baseline_ready) {
     if (!dimmer_profile(product).supported)
         return "unsupported";
     if (!exposed)

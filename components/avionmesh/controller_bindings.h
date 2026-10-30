@@ -42,8 +42,9 @@ inline bool keypad_assignment_write_supported(uint8_t product) {
     return product == 127;
 }
 inline const char *keypad_programming_status(uint8_t product) {
-    return product == 127 ? "supported" : product == 126 ? "programming_unverified"
-                                                         : "model_unverified";
+    return product == 127   ? "supported"
+           : product == 126 ? "programming_unverified"
+                            : "model_unverified";
 }
 // Observed battery Power/Off wake indication. Require a fresh authenticated
 // source packet at the call site; cached or ordinary brightness packets do not arm reads.

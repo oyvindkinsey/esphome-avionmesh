@@ -1161,7 +1161,8 @@ std::string AvionMeshHub::controller_input_status(uint16_t target) const {
     if (dimmer_profile(dev->product_type).supported) {
         const auto found = controller_local_levels_.find(target);
         const bool ready = found != controller_local_levels_.end() && found->second.ready();
-        return dimmer_input_status(dev->product_type, dev->mqtt_exposed, dev->ha_local_level, ready);
+        return dimmer_input_status(dev->product_type, dev->mqtt_exposed, dev->ha_local_level,
+                                   ready);
     }
     if (!dev->mqtt_exposed)
         return "disabled";
@@ -1305,7 +1306,7 @@ void AvionMeshHub::process_controller_events() {
         if (!dev || !is_controller(dev->product_type))
             continue;
         handle_battery_keypad_wake(decrypted.source, parsed.opcode, parsed.payload,
-                                  parsed.payload_len, packet.received_ms);
+                                   parsed.payload_len, packet.received_ms);
         if (controller_program_active_ &&
             static_cast<int32_t>(packet.received_ms - controller_program_since_ms_) >= 0 &&
             controller_program_reply_matches(controller_program_target_,

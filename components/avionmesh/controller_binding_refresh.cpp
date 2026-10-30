@@ -94,8 +94,8 @@ void AvionMeshHub::start_controller_binding_refresh(uint16_t target) {
     do_sse_emit("controller_buttons", controller_bindings_json(target));
 }
 void AvionMeshHub::handle_battery_keypad_wake(uint16_t source, uint8_t opcode,
-                                            const uint8_t *payload, size_t length,
-                                            uint32_t received) {
+                                              const uint8_t *payload, size_t length,
+                                              uint32_t received) {
     // Called only after the receive path authenticates source. A queued packet
     // from before the user's read request must not open a new receive window.
     const auto *device = db_.find_device(source);
@@ -206,7 +206,7 @@ void AvionMeshHub::binding_refresh_reply(const char *status, const uint8_t *payl
     } else {
         if (!payload ||
             !controller_table_reply_matches(binding_refresh_target_, binding_refresh_slot_,
-                                             binding_refresh_target_, 0x73, payload, length)) {
+                                            binding_refresh_target_, 0x73, payload, length)) {
             finish_controller_binding_refresh("invalid_slot_record");
             return;
         }

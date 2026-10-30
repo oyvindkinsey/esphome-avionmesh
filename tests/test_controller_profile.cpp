@@ -15,10 +15,14 @@ int main() {
             assert(uses_local_dimmer_reports(product, configured) == (configured && product == 91));
             for (bool exposed : {false, true})
                 for (bool baseline : {false, true}) {
-                    const char *expected = !profile.supported ? "unsupported" : !exposed ? "disabled"
-                        : configured && product == 91 ? (baseline ? "ready_local_reports" : "waiting_for_baseline")
-                        : "native_commands";
-                    assert(!std::strcmp(dimmer_input_status(product, exposed, configured, baseline), expected));
+                    const char *expected =
+                        !profile.supported ? "unsupported"
+                        : !exposed         ? "disabled"
+                        : configured && product == 91
+                            ? (baseline ? "ready_local_reports" : "waiting_for_baseline")
+                            : "native_commands";
+                    assert(!std::strcmp(dimmer_input_status(product, exposed, configured, baseline),
+                                        expected));
                 }
         }
     }
@@ -28,7 +32,8 @@ int main() {
     uint8_t native[] = {0, 10, 1, 16, 1, 0, 255, 0, 0, 0};
     uint8_t local[] = {1, 10, 0, 255};
     ControllerCommand command;
-    assert(decode_controller_command(91, 0x73, native, sizeof(native), command) && command.absolute);
+    assert(decode_controller_command(91, 0x73, native, sizeof(native), command) &&
+           command.absolute);
     AbsoluteDimmerDirection direction;
     assert(direction.observe(command.target, 10, command.brightness, 1000).accepted);
     assert(!decode_local_dimmer_report(91, 0x73, native, sizeof(native), command));
