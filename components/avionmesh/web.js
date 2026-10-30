@@ -12,6 +12,11 @@ const PRODUCTS = [
   {v:137,n:'Surface DL'}, {v:162,n:'Micro Edge'}, {v:167,n:'Smart Switch'}
 ];
 
+// CSR product id (from ping replies) → Avi-on product type, learned from
+// observed meshes. Extend as new hardware is seen; unknown ids fall back
+// to manual selection.
+const CSR_TO_PRODUCT = {18: 162, 19: 167};
+
 const $ = id => document.getElementById(id);
 const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML };
 
@@ -533,16 +538,22 @@ function renderScanResults(devs) {
     tb.innerHTML = '<tr><td colspan="6" class="empty">No devices found</td></tr>';
     return;
   }
-  tb.innerHTML = devs.map(d => `<tr>
+  tb.innerHTML = devs.map(d => {
+    const suggested = d.short ? 0 : (CSR_TO_PRODUCT[d.csr_product_id] || 0);
+    const type_note = d.short
+      ? '<div style="font-size:.75em;color:var(--warn)">Short reply: type not detectable, pick manually</div>'
+      : (suggested ? '' : '<div style="font-size:.75em;color:var(--warn)">Unknown CSR id, pick manually</div>');
+    return `<tr>
     <td>${d.device_id}</td>
     <td>${d.fw}</td>
     <td>${d.vendor_id}</td>
     <td>${d.csr_product_id}</td>
     <td>${d.known ? '<span style="color:var(--ok)">Known</span>' : 'New'}</td>
     <td>${d.known ? '' : `<input placeholder="Name" id="sn${d.device_id}" style="width:90px" value="Device ${d.device_id}">
-      ${productSelect(0)}
+      ${productSelect(suggested)}
+      ${type_note}
       <button class="sm" onclick="addScanned(${d.device_id})">Add</button>`}</td>
-  </tr>`).join('');
+  </tr>`; }).join('');
 }
 
 async function addScanned(did) {

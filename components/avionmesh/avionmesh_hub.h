@@ -53,10 +53,13 @@ struct DeviceState {
 
 struct DiscoveredDevice {
     uint16_t device_id;
-    uint8_t fw_major, fw_minor, fw_patch;
-    uint8_t flags;
-    uint16_t vendor_id;
-    uint8_t csr_product_id;
+    uint8_t fw_major{0}, fw_minor{0}, fw_patch{0};
+    uint8_t flags{0};
+    uint16_t vendor_id{0};
+    uint8_t csr_product_id{0};
+    // True when the ping reply was too short to carry fw/vendor/product
+    // fields (some devices answer with a truncated payload).
+    bool short_reply{false};
 };
 
 enum class BleState : uint8_t {

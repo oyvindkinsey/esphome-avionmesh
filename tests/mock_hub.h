@@ -2,6 +2,7 @@
 
 #include "../components/avionmesh/avionmesh_hub.h"
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <tuple>
@@ -69,6 +70,26 @@ class TestHub : public AvionMeshHub {
         }
         process_deferred_actions();
     }
+
+    // Simulate a ping reply arriving during mesh discovery/scan.
+    // MODEL_OPCODE=0x73, payload[0]=Verb::Ping(6), then raw reply bytes.
+    void inject_ping(uint16_t device_id, std::initializer_list<uint8_t> reply) {
+        std::vector<uint8_t> payload;
+        payload.push_back(0x06);
+        for (uint8_t b : reply)
+            payload.push_back(b);
+        on_mesh_rx(device_id, device_id, 0x73, payload.data(), payload.size());
+    }
+
+    // Deliver a payload buffer with an explicit length (may be shorter than
+    // the backing buffer to simulate short replies with sentinel bytes past len).
+    void inject_ping_raw(uint16_t device_id, const uint8_t *data, size_t len) {
+        on_mesh_rx(device_id, device_id, 0x73, data, len);
+    }
+
+    void set_discovering(bool on) { discovering_mesh_ = on; }
+
+    const std::vector<DiscoveredDevice> &discovered() const { return discovered_devices_; }
 
     DeviceDB &db() { return db_; }
     std::map<uint16_t, DeviceState> &states() { return device_states_; }

@@ -56,6 +56,7 @@ set(SOURCES
     test_mqtt_commands.cpp
     test_sse_events.cpp
     test_api_control.cpp
+    test_discover_ping.cpp
 )
 
 add_executable(avionmesh_tests ${SOURCES})

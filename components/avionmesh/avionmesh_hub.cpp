@@ -959,15 +959,23 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
 
                 DiscoveredDevice dev;
                 dev.device_id = device_id;
-                dev.fw_major = payload[3];
-                dev.fw_minor = payload[4];
-                dev.fw_patch = payload[5];
-                dev.flags = payload[6];
-                dev.vendor_id = (static_cast<uint16_t>(payload[7]) << 8) | payload[8];
-                dev.csr_product_id = payload[9];
+                // Fields live at payload[3..9]; shorter replies (e.g. Smart
+                // Dimmers) carry no fw/vendor/product info — record the
+                // device but leave the fields zeroed instead of over-reading.
+                if (payload_len >= 10) {
+                    dev.fw_major = payload[3];
+                    dev.fw_minor = payload[4];
+                    dev.fw_patch = payload[5];
+                    dev.flags = payload[6];
+                    dev.vendor_id = (static_cast<uint16_t>(payload[7]) << 8) | payload[8];
+                    dev.csr_product_id = payload[9];
+                } else {
+                    dev.short_reply = true;
+                }
                 discovered_devices_.push_back(dev);
-                ESP_LOGI(TAG, "Discovered device %u: fw=%u.%u.%u product=%u", device_id,
-                         dev.fw_major, dev.fw_minor, dev.fw_patch, dev.csr_product_id);
+                ESP_LOGI(TAG, "Discovered device %u: fw=%u.%u.%u product=%u%s", device_id,
+                         dev.fw_major, dev.fw_minor, dev.fw_patch, dev.csr_product_id,
+                         dev.short_reply ? " (short reply)" : "");
             }
         }
     }
@@ -1282,9 +1290,9 @@ void AvionMeshHub::handle_discover_mesh() {
             char buf[256];
             snprintf(buf, sizeof(buf),
                      "%s{\"device_id\":%u,\"fw\":\"%u.%u.%u\","
-                     "\"vendor_id\":%u,\"csr_product_id\":%u,\"known\":%s}",
+                     "\"vendor_id\":%u,\"csr_product_id\":%u,\"known\":%s,\"short\":%s}",
                      i > 0 ? "," : "", d.device_id, d.fw_major, d.fw_minor, d.fw_patch, d.vendor_id,
-                     d.csr_product_id, known ? "true" : "false");
+                     d.csr_product_id, known ? "true" : "false", d.short_reply ? "true" : "false");
             devices_arr += buf;
         }
         devices_arr += "]";
