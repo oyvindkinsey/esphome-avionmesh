@@ -63,6 +63,7 @@ set(SOURCES
     test_discover_ping.cpp
     test_uuid_identity.cpp
     test_db_batch.cpp
+    test_upstream_integration.cpp
 )
 
 add_executable(avionmesh_tests ${SOURCES})

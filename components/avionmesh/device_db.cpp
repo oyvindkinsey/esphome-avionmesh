@@ -258,7 +258,9 @@ bool DeviceDB::rename_group(uint16_t group_id, const std::string &name) {
     if (name.empty())
         return false;
     auto *grp = find_group(group_id);
-    if (!grp)
+    // Owned event target names encode their controller/slot. Renaming would
+    // break ownership and allow later setup to allocate a second target.
+    if (!grp || grp->ha_event_target || grp->name.rfind("HA event target: ", 0) == 0)
         return false;
     grp->name = name;
     save();

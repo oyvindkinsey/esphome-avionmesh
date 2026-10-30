@@ -102,7 +102,7 @@ function controllerCard(d) {
     ready_local_reports:'Ready · local controller reports', native_commands:'Native command events'};
   const model = {91: 'Accessory Dimmer', 81: 'Anywhere Dimmer', 127: 'Wired Scene Keypad', 126: 'Battery Scene Keypad'}[d.product_type];
   return `<div class="card" data-controller="${d.avion_id}">
-    <div class="card-name">${esc(d.name)}</div>
+    <div class="card-name">${esc(d.name)} <a href="#" class="rename-link" onclick="renameDev(${d.avion_id});return false" title="Rename">✎</a></div>
     <div class="card-sub">${esc(model)} · #${d.avion_id}</div>
     ${[81,91].includes(d.product_type) ? `<p style="font-size:.82em;color:var(--accent2)">${esc(inputLabels[d.ha_input_status] || 'Checking HA input…')}</p>` : ''}
     <label class="toggle-row" style="margin-top:12px">
