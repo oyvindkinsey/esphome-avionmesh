@@ -23,11 +23,20 @@ esp_err_t receive_http(esp_http_client_event_t *event) {
     auto &response = *static_cast<CloudHttpResponseBound *>(event->user_data);
     CloudHttpEvent kind = CloudHttpEvent::Terminal;
     switch (event->event_id) {
-        case HTTP_EVENT_ON_CONNECTED: kind = CloudHttpEvent::Connected; break;
-        case HTTP_EVENT_HEADERS_SENT: kind = CloudHttpEvent::HeadersSent; break;
-        case HTTP_EVENT_ON_HEADER: kind = CloudHttpEvent::Header; break;
-        case HTTP_EVENT_ON_DATA: kind = CloudHttpEvent::Data; break;
-        default: break;
+        case HTTP_EVENT_ON_CONNECTED:
+            kind = CloudHttpEvent::Connected;
+            break;
+        case HTTP_EVENT_HEADERS_SENT:
+            kind = CloudHttpEvent::HeadersSent;
+            break;
+        case HTTP_EVENT_ON_HEADER:
+            kind = CloudHttpEvent::Header;
+            break;
+        case HTTP_EVENT_ON_DATA:
+            kind = CloudHttpEvent::Data;
+            break;
+        default:
+            break;
     }
     const bool data_event = kind == CloudHttpEvent::Data;
     if (data_event)
@@ -95,7 +104,8 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
     const bool framing_complete = esp_http_client_is_complete_data_received(client);
     esp_http_client_cleanup(client);
     erase_secret(authorization);
-    const bool complete = response.complete(result == ESP_OK, framing_complete, esp_timer_get_time());
+    const bool complete =
+        response.complete(result == ESP_OK, framing_complete, esp_timer_get_time());
     if (response.timed_out || response.too_big) {
         error = response.timed_out ? "sync_timeout" : "cloud_response_too_large";
         erase_secret(response.body);

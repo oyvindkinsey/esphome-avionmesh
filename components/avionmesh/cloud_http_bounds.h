@@ -47,7 +47,7 @@ struct CloudHttpResponseBound {
     bool begin_close() {
         if (!failed() || close_started)
             return false;
-        close_started = true; // Must precede synchronous DISCONNECTED dispatch.
+        close_started = true;  // Must precede synchronous DISCONNECTED dispatch.
         return true;
     }
     bool complete(bool transport_ok, bool framing_complete, int64_t now_us) {
@@ -57,7 +57,7 @@ struct CloudHttpResponseBound {
 
 enum class CloudHttpEvent { Connected, HeadersSent, Header, Data, Terminal };
 
-template<typename SetTimeout, typename Close>
+template <typename SetTimeout, typename Close>
 bool handle_cloud_http_event(CloudHttpResponseBound &response, CloudHttpEvent event,
                              const char *data, int64_t length, int64_t now_us,
                              SetTimeout set_timeout, Close close) {

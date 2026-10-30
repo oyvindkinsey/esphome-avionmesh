@@ -16,8 +16,12 @@ struct FakeTransport {
         ++callback_depth;
         if (callback_depth > max_depth)
             max_depth = callback_depth;
-        (void)handle_cloud_http_event(response, event, bytes, length, now,
-            [&](int ms) { assert(ms > 0 && ms <= 15000); timeouts.push_back(ms); },
+        (void)handle_cloud_http_event(
+            response, event, bytes, length, now,
+            [&](int ms) {
+                assert(ms > 0 && ms <= 15000);
+                timeouts.push_back(ms);
+            },
             [&] {
                 assert(response.close_started);
                 ++closes;
@@ -38,10 +42,11 @@ int main() {
     exact.dispatch(CloudHttpEvent::Data, "!", 1, 3);
     assert(exact.closed && exact.closes == 1 && exact.max_depth == 2);
     assert(exact.response.too_big && exact.response.body.size() == cap.size());
-    exact.dispatch(CloudHttpEvent::Data, "more", 4, 4); // Already-buffered parser events.
+    exact.dispatch(CloudHttpEvent::Data, "more", 4, 4);  // Already-buffered parser events.
     exact.dispatch(CloudHttpEvent::Terminal, nullptr, 0, 2000000);
     assert(exact.closes == 1 && exact.response.body == cap);
-    assert(!exact.response.complete(true, true, 5)); // Even a false-success transport cannot commit.
+    assert(
+        !exact.response.complete(true, true, 5));  // Even a false-success transport cannot commit.
 
     FakeTransport oversize(1000000);
     oversize.dispatch(CloudHttpEvent::Data, cap.data(), cap.size() + 1, 0);
@@ -73,11 +78,12 @@ int main() {
 
     FakeTransport terminal(100);
     terminal.dispatch(CloudHttpEvent::Terminal, nullptr, 0, 200);
-    assert(terminal.closes == 0); // FINISH/DISCONNECTED never initiate close.
-    assert(!terminal.response.complete(true, true, 200)); // Final check catches silent expiry.
+    assert(terminal.closes == 0);  // FINISH/DISCONNECTED never initiate close.
+    assert(!terminal.response.complete(true, true, 200));  // Final check catches silent expiry.
     assert(terminal.response.timed_out);
     FakeTransport truncated(1000);
-    truncated.dispatch(CloudHttpEvent::Data, "{}", 2, 1); // Valid JSON prefix is not a full HTTP body.
+    truncated.dispatch(CloudHttpEvent::Data, "{}", 2,
+                       1);  // Valid JSON prefix is not a full HTTP body.
     assert(!truncated.response.complete(true, false, 2));
     assert(!truncated.response.complete(false, true, 2));
     assert(truncated.response.complete(true, true, 2));
