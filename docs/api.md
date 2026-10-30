@@ -84,10 +84,10 @@ Clients that need a complete current inventory must reconnect and receive a new
 snapshot after disconnect; transient physical command events are never replayed.
 
 Initial sync is paced: at most one frame is added per main-loop turn, and its
-cursor waits for pending output to drain. Devices retain batches of five; groups
-use one group per frame so dense membership arrays remain below the same byte
-bound. The existing UI merges each `groups` batch by group ID. A cursor advances
-only after enqueue succeeds, and `sync_complete` follows every accepted snapshot
+cursor waits for pending output to drain. Devices and groups each use one
+record per frame so escaped names and dense membership arrays do not make a
+multi-record batch exceed the same byte bound. The existing UI merges each
+`groups` batch by group ID. A cursor advances only after enqueue succeeds, and `sync_complete` follows every accepted snapshot
 frame in the same FIFO. An oversized single record closes the stream instead of
 skipping it or claiming snapshot completion. A snapshot is assembled over time,
 with the existing live update events interleaved; it is not a transactional copy

@@ -233,8 +233,9 @@ struct Inventory {
     const auto &devices() const { return devs; }
     const auto &groups() const { return grps; }
 };
-void initial_sync(size_t device_count, size_t group_count, bool dense) {
+void initial_sync(size_t device_count, size_t group_count, bool dense, bool heavy_names = false) {
     Inventory db;
+    const uint16_t group_base = heavy_names ? 20000 : 256;
     const std::string tricky_name =
         "quoted \"name\" \\ path\nnewline\rreturn\ttab\x01\x1f café 灯 ";
     std::map<uint16_t, State> states;
@@ -244,11 +245,13 @@ void initial_sync(size_t device_count, size_t group_count, bool dense) {
                            static_cast<uint8_t>(i % 5 ? 93 : 127),
                            tricky_name + "device " + std::to_string(i),
                            {}});
+        if (heavy_names)
+            db.devs.back().name = std::string(128, '\x01');
         states[id] = {};
     }
     size_t expected_members = 0;
     for (size_t g = 0; g < group_count; ++g) {
-        const auto id = static_cast<uint16_t>(256 + g);
+        const auto id = static_cast<uint16_t>(group_base + g);
         GroupEntry group{id, tricky_name + "group " + std::to_string(g), {}};
         for (size_t i = 0; i < (dense ? device_count : size_t(4)); ++i) {
             auto &device = db.devs[i % device_count];
@@ -295,7 +298,7 @@ void initial_sync(size_t device_count, size_t group_count, bool dense) {
             for (JsonObjectConst group : doc["groups"].as<JsonArrayConst>()) {
                 const auto id = group["group_id"].as<uint16_t>();
                 assert(groups.insert(id).second);
-                assert(group["name"].as<std::string>() == db.grps.at(id - 256).name);
+                assert(group["name"].as<std::string>() == db.grps.at(id - group_base).name);
                 members += group["members"].size();
             }
         if (event.type == "sync_complete") {
@@ -352,5 +355,7 @@ int main() {
     initial_sync(19, 10, false);
     initial_sync(81, 16, false);
     initial_sync(200, 40, true);
+    initial_sync(5, 128, true,
+                 true);  // Each record fits; five escaped names/membership arrays do not.
     concurrent_producers();
 }

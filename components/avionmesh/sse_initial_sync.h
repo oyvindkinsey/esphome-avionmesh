@@ -25,10 +25,11 @@ void send_sse_initial_sync(SseSession *session, const DB &db, const States &stat
         return;
     }
 
-    // Devices in batches of five.
+    // One device per frame: even five individually valid records can exceed
+    // the byte bound after name escaping and dense membership serialization.
     if (session->sync_phase == SseSession::SyncPhase::Devices) {
         auto &devs = db.devices();
-        static constexpr size_t BATCH = 5;
+        static constexpr size_t BATCH = 1;
         const size_t i = session->sync_index;
         if (i < devs.size()) {
             std::string json = "{\"devices\":[";
