@@ -362,7 +362,7 @@ function connectSSE() {
       res.innerHTML = d.error
         ? `<span style="color:var(--err)">${esc(d.error)}</span>`
         : d.short
-          ? `Short ping reply (controller-style, no FW info) · raw ${esc(d.raw)}`
+          ? `Short ping reply (no FW info) · raw ${esc(d.raw)}`
           : `FW ${d.fw} · Vendor ${d.vendor_id} · CSR ${d.csr_product_id} · Flags ${d.flags}`;
       setTimeout(() => res.textContent = '', 15000);
     }

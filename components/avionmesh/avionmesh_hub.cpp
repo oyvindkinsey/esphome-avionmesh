@@ -879,7 +879,7 @@ void AvionMeshHub::on_mesh_rx(uint16_t mcp_source, uint16_t crypto_source, uint8
         if (examining_ && device_id == examine_target_) {
             examining_ = false;
 
-            // Controllers (e.g. Smart Dimmers) answer pings with a short
+            // Some devices (e.g. Smart Dimmers) answer pings with a short
             // payload that carries no firmware/vendor fields; report the raw
             // bytes instead of timing out.
             char buf[256];
