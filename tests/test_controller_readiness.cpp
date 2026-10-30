@@ -95,7 +95,7 @@ void expect_single_waiting_status(const ReadinessHub &hub) {
     EXPECT_EQ(event["controller_id"], 33001);
     EXPECT_EQ(event["status"], "waiting_for_baseline");
 }
-}
+}  // namespace
 
 TEST(ControllerReadiness, BleLossRevokesLocalInputUntilFreshBaselineWithoutRepeatedPublishes) {
     ReadinessHub hub;
@@ -128,7 +128,7 @@ TEST(ControllerReadiness, BleLossRevokesLocalInputUntilFreshBaselineWithoutRepea
     hub.connection(true, true);
     EXPECT_EQ(hub.controller_input_status(33001), "waiting_for_baseline");
     EXPECT_EQ(input_availability(hub), "offline");
-    EXPECT_EQ(hub.mqtt_publishes.size(), 1u); // BLE recovery cannot restore a stale baseline.
+    EXPECT_EQ(hub.mqtt_publishes.size(), 1u);  // BLE recovery cannot restore a stale baseline.
     EXPECT_FALSE(hub.report(33001, 3, 255, 3000, true).accepted);
     EXPECT_EQ(hub.controller_input_status(33001), "ready_local_reports");
     EXPECT_EQ(input_availability(hub), "online");
@@ -137,7 +137,7 @@ TEST(ControllerReadiness, BleLossRevokesLocalInputUntilFreshBaselineWithoutRepea
     for (const auto &[topic, payload] : refreshed) {
         ASSERT_TRUE(configs.contains(topic));
         EXPECT_FALSE(payload.empty());
-        EXPECT_EQ(payload, configs.at(topic)); // Same event/trigger ID and complete config.
+        EXPECT_EQ(payload, configs.at(topic));  // Same event/trigger ID and complete config.
     }
     EXPECT_TRUE(hub.report(33001, 4, 255, 3100).accepted);
     EXPECT_TRUE(hub.mesh_sends.empty());
@@ -155,7 +155,7 @@ TEST(ControllerReadiness, MqttReconnectPublishesBaselineOfflineBeforeSharedRecov
     hub.clear_captures();
 
     hub.connection(false, true);
-    EXPECT_TRUE(hub.mqtt_publishes.empty()); // No attempts through a disconnected MQTT client.
+    EXPECT_TRUE(hub.mqtt_publishes.empty());  // No attempts through a disconnected MQTT client.
     EXPECT_EQ(hub.controller_input_status(33001), "waiting_for_baseline");
     expect_single_waiting_status(hub);
     for (unsigned loop = 0; loop < 100; ++loop)
@@ -163,7 +163,7 @@ TEST(ControllerReadiness, MqttReconnectPublishesBaselineOfflineBeforeSharedRecov
     EXPECT_TRUE(hub.mqtt_publishes.empty());
     EXPECT_EQ(hub.sse_events.size(), 1u);
 
-    hub.connection(true, true); // Actual reconnect discovery path in the hub helper.
+    hub.connection(true, true);  // Actual reconnect discovery path in the hub helper.
     EXPECT_EQ(input_availability(hub), "offline");
     EXPECT_EQ(hub.controller_input_status(33001), "waiting_for_baseline");
     EXPECT_EQ(hub.controller_input_status(33002), "native_commands");
@@ -172,10 +172,11 @@ TEST(ControllerReadiness, MqttReconnectPublishesBaselineOfflineBeforeSharedRecov
     const auto count = hub.mqtt_publishes.size();
     hub.connection(true, true);
     EXPECT_EQ(hub.mqtt_publishes.size(), count);
-    EXPECT_FALSE(hub.report(33003, 2, 255, 2000).accepted); // Other models cannot seed local input.
-    EXPECT_FALSE(hub.report(33002, 2, 255, 2000).accepted); // Native mode cannot seed local input.
+    EXPECT_FALSE(
+        hub.report(33003, 2, 255, 2000).accepted);  // Other models cannot seed local input.
+    EXPECT_FALSE(hub.report(33002, 2, 255, 2000).accepted);  // Native mode cannot seed local input.
     EXPECT_EQ(input_availability(hub), "offline");
-    EXPECT_FALSE(hub.report(33001, 2, 255, 2000).accepted); // First local report is a silent seed.
+    EXPECT_FALSE(hub.report(33001, 2, 255, 2000).accepted);  // First local report is a silent seed.
     EXPECT_EQ(input_availability(hub), "online");
     EXPECT_TRUE(hub.report(33001, 3, 255, 2100).accepted);
     EXPECT_TRUE(hub.mesh_sends.empty());

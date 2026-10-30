@@ -401,7 +401,8 @@ bool AvionMeshHub::init_crypto() {
             on_mesh_rx(mcp_source, crypto_source, opcode, payload, payload_len);
         });
 
-    install_controller_rx_observer(mesh_ctx_, controller_packets_, [] { return esphome::millis(); });
+    install_controller_rx_observer(mesh_ctx_, controller_packets_,
+                                   [] { return esphome::millis(); });
 
     crypto_initialized_ = true;
     ESP_LOGI(TAG, "CSRMesh crypto initialized");
@@ -1259,9 +1260,8 @@ AbsoluteDimmerDirection::Change AvionMeshHub::observe_controller_local_report(
     const auto change = reports.observe(sequence, level, received_ms, query_reply);
     if (!previously_ready && reports.ready()) {
         publish_controller_actions(source);
-        do_sse_emit("controller_input_status",
-                    "{\"controller_id\":" + std::to_string(source) +
-                        ",\"status\":\"ready_local_reports\"}");
+        do_sse_emit("controller_input_status", "{\"controller_id\":" + std::to_string(source) +
+                                                   ",\"status\":\"ready_local_reports\"}");
     }
     return change;
 }
@@ -1324,8 +1324,8 @@ void AvionMeshHub::process_controller_events() {
         csrmesh::mcp_crypto::Decrypted decrypted{};
         decrypted.source = observation.crypto_source;
         decrypted.seq = observation.sequence;
-        csrmesh::mcp::Parsed parsed{observation.mcp_source, observation.opcode,
-                                  observation.payload, observation.payload_len};
+        csrmesh::mcp::Parsed parsed{observation.mcp_source, observation.opcode, observation.payload,
+                                    observation.payload_len};
 #else
         csrmesh::mcp_crypto::Decrypted decrypted;
         if (!crypto_initialized_ || csrmesh::mcp_crypto::decrypt_packet(
