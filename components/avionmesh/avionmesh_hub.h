@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_db.h"
+#include "cloud_sync.h"
 #include "mqtt_discovery.h"
 #include "mesh_capture.h"
 #include "controller_events.h"
@@ -138,6 +139,7 @@ class AvionMeshHub : public esphome::Component {
     static constexpr uint32_t ASSOCIATION_TIMEOUT_MS = 30000;
 
     DeviceDB db_;
+    CloudSync cloud_sync_;
     ControllerBindings controller_bindings_;
     KeypadSetupJournal keypad_setup_journal_;
     enum class KeypadSetupPhase : uint8_t {

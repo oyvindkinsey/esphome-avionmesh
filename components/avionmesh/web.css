@@ -392,3 +392,6 @@ td { padding: 5px 6px; border-bottom: 1px solid var(--border) }
 .empty   { color: var(--dim); font-size: .85em; padding: 16px 0; text-align: center }
 .row     { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px }
 .mono    { font-family: monospace }
+
+#cloudSyncSummary:empty { display: none }
+#cloudSyncSummary { margin: 0 0 16px; color: var(--accent2) }

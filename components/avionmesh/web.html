@@ -17,10 +17,29 @@
     <span><span class="s">RX:</span> <span id="rxCount" class="v">0</span></span>
     <span id="sseDot" class="sse-dot sse-off"></span>
   </div>
+  <button class="sm" onclick="openCloudSync()" id="btnCloudSync">Sync with Avi-on</button>
   <button class="sm ghost" onclick="saveDb()" id="btnSave">Save</button>
   <span id="saveMsg" class="save-msg"></span>
 </header>
 
+
+<dialog id="cloudSyncDialog" aria-labelledby="cloudSyncTitle">
+  <form id="cloudSyncForm">
+    <h2 id="cloudSyncTitle">Sync with Avi-on</h2>
+    <p>Add lights, controllers and groups from the account for this mesh. Existing local devices, HA settings and keypad assignments are preserved.</p>
+    <p>Sign in for this sync only. The ESP32 connects to Avi-on over HTTPS. Your login is not saved. This local form uses HTTP; use it only on a trusted LAN.</p>
+    <label for="cloudEmail">Avi-on account email</label>
+    <input id="cloudEmail" type="email" autocomplete="username" maxlength="254" required>
+    <label for="cloudPassword">Password</label>
+    <input id="cloudPassword" type="password" autocomplete="current-password" maxlength="1024" required>
+    <p id="cloudSyncStatus" role="status" aria-live="polite"></p>
+    <div class="row">
+      <button id="btnCloudSubmit" type="submit">Sync inventory</button>
+      <button class="ghost" type="button" onclick="closeCloudSync()">Close</button>
+    </div>
+  </form>
+</dialog>
+<p id="cloudSyncSummary" role="status" aria-live="polite"></p>
 
 <section>
   <div class="section-header">

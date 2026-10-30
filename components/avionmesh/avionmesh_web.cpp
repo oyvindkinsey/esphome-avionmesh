@@ -188,6 +188,10 @@ void AvionMeshWebHandler::handleRequest(AsyncWebServerRequest *request) {
         handle_remove_from_group(request);
     } else if (url == "/api/import" && method == HTTP_POST) {
         handle_import(request);
+    } else if (url == "/api/cloud_sync" && method == HTTP_POST) {
+        handle_cloud_sync(request);
+    } else if (url == "/api/cloud_sync/status" && method == HTTP_GET) {
+        send_json(request, 200, hub_->cloud_sync_.status_json());
     } else if (url == "/api/controller_buttons/read" && method == HTTP_POST) {
         handle_controller_bindings_read(request);
     } else if (url == "/api/controller_buttons/setup" && method == HTTP_POST) {
@@ -689,6 +693,50 @@ void AvionMeshWebHandler::handle_import(AsyncWebServerRequest *request) {
         hub_->pending_actions_.push_back(std::move(act));
     }
     send_json(request, 200, "{\"status\":\"started\"}");
+}
+
+void AvionMeshWebHandler::handle_cloud_sync(AsyncWebServerRequest *request) {
+    // Browser requests must originate on this UI; scripts may omit Origin.
+    auto origin = request->get_header("Origin");
+    auto host = request->get_header("Host");
+    std::string body = read_body(request);
+    auto wipe = [&]() {
+        volatile char *p = body.empty() ? nullptr : &body[0];
+        for (size_t i = 0; i < body.size(); ++i)
+            p[i] = 0;
+        body.clear();
+    };
+    if (origin.has_value() && (!host.has_value() || *origin != "http://" + *host)) {
+        wipe();
+        send_error(request, 403, "invalid_origin");
+        return;
+    }
+    if (body.empty() || body.size() > 4096) {
+        wipe();
+        send_error(request, 400, "invalid_credentials");
+        return;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body) || !doc["email"].is<const char *>() ||
+        !doc["password"].is<const char *>()) {
+        wipe();
+        send_error(request, 400, "invalid_credentials");
+        return;
+    }
+    std::string email = doc["email"].as<std::string>();
+    std::string password = doc["password"].as<std::string>();
+    doc.clear();
+    wipe();
+    if (email.empty() || email.size() > 254 || password.empty() || password.size() > 1024) {
+        std::fill(password.begin(), password.end(), 0);
+        send_error(request, 400, "invalid_credentials");
+        return;
+    }
+    if (!hub_->cloud_sync_.queue(std::move(email), std::move(password))) {
+        send_error(request, 409, "sync_already_running");
+        return;
+    }
+    send_json(request, 202, "{\"status\":\"started\"}");
 }
 
 void AvionMeshWebHandler::handle_controller_bindings_read(AsyncWebServerRequest *request) {

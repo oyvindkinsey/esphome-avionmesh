@@ -56,6 +56,7 @@ class AvionMeshWebHandler : public AsyncWebHandler {
     void handle_add_to_group(AsyncWebServerRequest *request);
     void handle_remove_from_group(AsyncWebServerRequest *request);
     void handle_import(AsyncWebServerRequest *request);
+    void handle_cloud_sync(AsyncWebServerRequest *request);
     void handle_controller_bindings_read(AsyncWebServerRequest *request);
     void handle_controller_setup(AsyncWebServerRequest *request);
     void handle_set_mqtt_exposed(AsyncWebServerRequest *request);

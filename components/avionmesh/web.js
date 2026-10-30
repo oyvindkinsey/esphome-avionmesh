@@ -55,6 +55,79 @@ async function postJson(path, data) {
   return api(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
 }
 
+let cloudPollTimer = null;
+const CLOUD_STATES = {queued: 'Preparing sync…', waiting_for_time: 'Waiting for the clock to synchronize…', signing_in: 'Signing in to Avi-on…',
+  finding_mesh: 'Finding the matching mesh…', reading_devices: 'Reading lights and controllers…',
+  reading_groups: 'Reading groups…', saving: 'Saving inventory…'};
+const CLOUD_ERRORS = {
+  clock_not_synchronized: 'The ESP32 clock has not synchronized. Check Internet/NTP access and retry.',
+  cloud_login_rejected: 'Avi-on rejected the login. Check your account details and retry.',
+  account_mesh_mismatch: 'This account does not contain exactly one location matching the ESP32 mesh. Nothing was imported.',
+  cloud_connection_failed: 'Could not connect securely to Avi-on. Check the network and retry.',
+  existing_group_changed: 'A cloud group was renamed or has removed members. Sync stopped for review; nothing was imported.',
+  device_identity_changed: 'A cloud device conflicts with an existing local record. Sync stopped for review.',
+  reserved_ha_target_collision: 'A cloud group conflicts with a protected HA event target. Nothing was imported.',
+  invalid_device_or_name: 'A device record or name is unsupported. Names must be 1–128 bytes without quotes, backslashes or control characters.',
+  invalid_group_or_name: 'A group record or name is unsupported. Nothing was imported.',
+  mesh_changed_during_sync: 'The mesh key changed during sync. Nothing was imported.',
+  mesh_key_required: 'Set up the mesh key before syncing.',
+  inventory_save_failed: 'The inventory could not be saved. Sync did not complete.'
+};
+function closeCloudSync() {
+  $('cloudPassword').value = '';
+  $('cloudSyncDialog').close();
+}
+async function openCloudSync() {
+  $('cloudSyncDialog').showModal();
+  $('cloudPassword').value = '';
+  await pollCloudSync();
+}
+async function pollCloudSync() {
+  clearTimeout(cloudPollTimer);
+  try {
+    // Do not put credentials or account responses in the debug feed.
+    const response = await fetch(API + 'cloud_sync/status', {cache: 'no-store'});
+    if (!response.ok) throw new Error('Could not read sync status');
+    const status = await response.json();
+    $('btnCloudSubmit').disabled = status.busy;
+    $('cloudEmail').disabled = status.busy;
+    $('cloudPassword').disabled = status.busy;
+    let text = CLOUD_STATES[status.state] || '';
+    if (status.state === 'complete') text = `Sync complete: ${status.added_devices} devices and ${status.added_groups} groups added. New controllers have HA events on; wired keypads set up unused buttons automatically. New lights and groups stay unexposed.`;
+    if (status.state === 'error') text = CLOUD_ERRORS[status.error] || `Sync stopped (${status.error}). Nothing was imported.`;
+    $('cloudSyncStatus').textContent = text;
+    $('cloudSyncSummary').textContent = text;
+    if (status.busy) cloudPollTimer = setTimeout(pollCloudSync, 1500);
+  } catch (error) {
+    $('cloudSyncStatus').textContent = 'Connection interrupted. Rechecking sync status…';
+    cloudPollTimer = setTimeout(pollCloudSync, 3000);
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  $('cloudSyncDialog').addEventListener('close', () => { $('cloudPassword').value = ''; });
+  $('cloudSyncForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    $('btnCloudSubmit').disabled = true;
+    // Drop the serialized credentials and clear the field immediately after dispatch.
+    let body = JSON.stringify({email: $('cloudEmail').value.trim(), password: $('cloudPassword').value});
+    const request = fetch(API + 'cloud_sync', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
+    body = '';
+    $('cloudPassword').value = '';
+    try {
+      const response = await request;
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error === 'sync_already_running' ? 'A sync is already running.' : 'Sync could not start. Check the login fields.');
+      }
+      await pollCloudSync();
+    } catch (error) {
+      $('cloudSyncStatus').textContent = error.message;
+      $('btnCloudSubmit').disabled = false;
+    }
+  });
+  pollCloudSync();
+});
+
 function showMsg(el, text, ok, sticky) {
   el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
   el.textContent = text;

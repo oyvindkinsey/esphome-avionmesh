@@ -467,6 +467,21 @@ void AvionMeshHub::loop() {
     }
 
     process_deferred_actions();
+#ifdef USE_ESP32
+    if (cloud_sync_.loop(db_)) {
+        // Cloud sync follows possible vendor-app edits. Require fresh keypad
+        // reads before using any old physical-button mapping again.
+        controller_bindings_.invalidate_all();
+        binding_refresh_status_.clear();
+        publish_all_discovery();
+        subscribe_all_commands();
+#ifdef USE_ESP32
+        if (web_handler_)
+            web_handler_->reset_sync();
+#endif
+        ESP_LOGI(TAG, "Cloud inventory sync completed (metadata only)");
+    }
+#endif
     process_capture();
     process_controller_events();
     const uint32_t read_timeout_ms = controller_read_timeout_ms();

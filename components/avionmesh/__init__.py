@@ -11,7 +11,7 @@ import os
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import esp32_ble
+from esphome.components import esp32, esp32_ble
 from esphome.components.esp32 import add_idf_sdkconfig_option
 from esphome.const import CONF_ID
 
@@ -79,6 +79,18 @@ async def to_code(config):
     # SSE drains/close requests run on HTTPD's task. A full work mailbox must
     # fail promptly for retry rather than block that same task waiting on itself.
     add_idf_sdkconfig_option("CONFIG_HTTPD_QUEUE_WORK_BLOCKING", False)
+    # Cloud sync uses a verified HTTPS connection on a background task.
+    if hasattr(esp32, "request_http_client"):
+        esp32.request_http_client()
+    else:
+        # ESPHome 2026.9 uses explicit built-in component inclusion.
+        esp32.include_builtin_idf_component("esp_http_client")
+        esp32.include_builtin_idf_component("esp-tls")
+    esp32.require_full_certificate_bundle()
+    add_idf_sdkconfig_option("CONFIG_ESP_TLS_INSECURE", False)
+    add_idf_sdkconfig_option("CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY", False)
+    add_idf_sdkconfig_option("CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC", True)
+    add_idf_sdkconfig_option("CONFIG_MBEDTLS_HAVE_TIME_DATE", True)
 
     # Passphrase is now optional - stored in NVS instead of config
     if CONF_PASSPHRASE in config:

@@ -1,0 +1,11 @@
+# Avi-on inventory resync (draft)
+
+Adds Sync with Avi-on to the mesh UI. POST /api/cloud_sync accepts the account email/password for one job; GET /api/cloud_sync/status reports progress and counts without exposing credentials or inventory. Browser requests require a matching Origin. Existing web-server authentication, if configured, still applies. The local form uses HTTP under the existing LAN trust model; the outbound cloud connection uses certificate-verified HTTPS and refuses redirects.
+
+The worker waits for a synchronized clock, signs in, finds exactly one account location with the current mesh key, and reads device/controller/group metadata. Numeric location PIDs are normalized as uint64 values. Fixed-host requests, response size limits and deadlines bound the worker. Credentials are held for the job, never persisted or included in debug messages. This does not promise complete memory zeroization of all library copies.
+
+Before saving, a pure validator checks the complete candidate against the latest local inventory. Existing identities, local-only entries, HA exposure/input flags and group memberships are retained. Renames, removed members, ID collisions, unresolved members and mesh mismatch stop the merge for review. New controllers use the controller defaults; new lights/groups stay unexposed. Protected event targets stay empty even when stale vendor metadata retains a bootstrap member. Checked persistence failure rolls the in-memory candidate back.
+
+Sync sends no physical association, group-membership or button-assignment command. After sync, cached button mappings are invalidated because the vendor app may have changed them; fresh hardware reads are required. Independently queued wired-keypad HA setup remains a separate feature of the preceding PR.
+
+Development validation included a real additive account sync, local-only controller/HA target preservation, rejected-login and invalid-Origin/body behavior, and 64-bit location IDs. The final protected-friendly-target guard was covered by host fixtures and restart checks, not a new real account login. This PR contains synthetic fixtures and no account snapshots. Continued cloud availability is required for resync only; existing local control does not depend on it.
