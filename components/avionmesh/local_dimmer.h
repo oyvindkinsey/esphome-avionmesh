@@ -3,9 +3,12 @@
 #include "controller_events.h"
 
 namespace avionmesh {
-// Observed unassigned model-91 format. This is a level report, including READ
-// responses. Transaction-tagged replies are queries; zero-tag reports are
-// unrequested inputs unless a matching zero-tag query was recently observed.
+// Observed on an unassigned product 91. The caller must authenticate the decrypted
+// source and obtain product from its inventory record; use 0 for unknown/untrusted
+// sources. Product-162 loads also emit this shape, so bytes alone do not establish
+// a local controller input. This is a level report, including READ responses.
+// Transaction-tagged replies are queries; zero-tag reports are unrequested inputs
+// unless a matching zero-tag query was recently observed.
 inline bool decode_local_dimmer_report(uint8_t product, uint8_t opcode, const uint8_t *payload,
                                        size_t length, ControllerCommand &result) {
     result = {};

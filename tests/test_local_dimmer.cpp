@@ -7,8 +7,16 @@ int main() {
     uint8_t report[] = {1, 10, 0, 255};
     assert(decode_local_dimmer_report(91, 0x73, report, 4, c));
     assert(c.absolute && c.brightness == 255 && c.target == 0 && !std::strcmp(c.event_type, "on"));
-    assert(!decode_local_dimmer_report(81, 0x73, report, 4, c));
-    assert(!decode_local_dimmer_report(127, 0x73, report, 4, c));
+    // Product-162 endpoint echoes share the same bytes. Unknown/untrusted sources
+    // are represented by product 0 after the caller's authenticated lookup fails.
+    for (uint8_t product : {0, 81, 126, 127, 162, 255}) {
+        for (uint8_t level : {0, 197, 255}) {
+            report[3] = level;
+            c.absolute = true;
+            assert(!decode_local_dimmer_report(product, 0x73, report, 4, c));
+            assert(!c.absolute && !c.relative && !c.brightness);
+        }
+    }
     assert(!decode_local_dimmer_report(91, 0x74, report, 4, c));
     assert(!decode_local_dimmer_report(91, 0x73, report, 3, c));
     report[2] = 0xa0;

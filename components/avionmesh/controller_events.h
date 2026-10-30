@@ -43,8 +43,10 @@ inline bool controller_event_is_fresh(uint32_t received, uint32_t now, uint32_t 
            static_cast<int32_t>(received - mesh_since) >= 0;
 }
 
-// Command events, not physical button/gesture guesses. Restrict recognized
-// dimming shapes to the captured ten-byte layout; preserve other writes raw.
+// Legacy compact-layout decoder. The caller must first authenticate the mesh
+// source and establish that it is an inventory controller. New callers should
+// use the product-aware overload below; this overload never enables the shifted
+// product-91 layout. Commands are not physical button/gesture guesses.
 inline bool decode_controller_command(uint8_t opcode, const uint8_t *payload, size_t length,
                                       ControllerCommand &result) {
     result = {};
@@ -63,6 +65,31 @@ inline bool decode_controller_command(uint8_t opcode, const uint8_t *payload, si
         result.relative = true;
         result.delta = payload[5] == 0x0d ? 13 : -13;
         result.event_type = result.delta > 0 ? "raise" : "lower";
+    }
+    return true;
+}
+
+// authenticated_product must come from an inventory lookup of the decrypted,
+// authenticated mesh source, never from payload shape or an advertised identity.
+// Pass 0 for an unknown/untrusted source. The decoder cannot authenticate packets.
+inline bool decode_controller_command(uint8_t authenticated_product, uint8_t opcode,
+                                      const uint8_t *payload, size_t length,
+                                      ControllerCommand &result) {
+    if (!is_controller(authenticated_product)) {
+        result = {};
+        return false;
+    }
+    if (!decode_controller_command(opcode, payload, length, result))
+        return false;
+    // Additional absolute Write/Dimming layout captured from a native product 91.
+    // Byte 5 is an observed zero, not a high level byte. No shifted relative form
+    // or other marker value is established by this capture.
+    if (authenticated_product == 91 && length == 10 && payload[0] == 0 && payload[1] == 10 &&
+        payload[4] == 1 && payload[5] == 0 && payload[7] == 0 && payload[8] == 0 &&
+        payload[9] == 0) {
+        result.absolute = true;
+        result.brightness = payload[6];
+        result.event_type = payload[6] == 0 ? "off" : (payload[6] == 255 ? "on" : "brightness");
     }
     return true;
 }
