@@ -1,4 +1,5 @@
 #include "avionmesh_hub.h"
+#include "controller_rx.h"
 #ifdef USE_ESP32
 #include "avionmesh_web.h"
 #endif
@@ -397,13 +398,7 @@ bool AvionMeshHub::init_crypto() {
             on_mesh_rx(mcp_source, crypto_source, opcode, payload, payload_len);
         });
 
-    // Preserve the library's full MASP/MCP handling. Tap reassembled frames
-    // without modifying the dependency or doing JSON/MQTT work in BLE callbacks.
-    auto original_mtl_rx = mesh_ctx_.mtl.rx_cb;
-    mesh_ctx_.mtl.rx_cb = [this, original_mtl_rx](const uint8_t *data, size_t length) {
-        controller_packets_.push(data, length, esphome::millis());
-        original_mtl_rx(data, length);
-    };
+    install_controller_rx_observer(mesh_ctx_, controller_packets_, [] { return esphome::millis(); });
 
     crypto_initialized_ = true;
     ESP_LOGI(TAG, "CSRMesh crypto initialized");
@@ -1279,6 +1274,20 @@ void AvionMeshHub::process_controller_events() {
 
     ControllerPacketQueue::Packet packet;
     for (unsigned i = 0; i < 8 && controller_packets_.pop(packet); ++i) {
+        if (!crypto_initialized_)
+            continue;
+#if defined(RECSRMESH_RX_OBSERVER_API) && RECSRMESH_RX_OBSERVER_API >= 1
+        ControllerObservation observation;
+        if (!parse_controller_observation(packet, observation))
+            continue;
+        // Preserve the existing source-gated processing with authenticated
+        // metadata copied by the library observer; do not decrypt a second time.
+        csrmesh::mcp_crypto::Decrypted decrypted{};
+        decrypted.source = observation.crypto_source;
+        decrypted.seq = observation.sequence;
+        csrmesh::mcp::Parsed parsed{observation.mcp_source, observation.opcode,
+                                  observation.payload, observation.payload_len};
+#else
         csrmesh::mcp_crypto::Decrypted decrypted;
         if (!crypto_initialized_ || csrmesh::mcp_crypto::decrypt_packet(
                                         mesh_ctx_.mcp_key, {packet.bytes.data(), packet.length},
@@ -1287,6 +1296,7 @@ void AvionMeshHub::process_controller_events() {
         csrmesh::mcp::Parsed parsed;
         if (!csrmesh::mcp::parse({decrypted.decrypted, decrypted.decrypted_len}, parsed))
             continue;
+#endif
         if (is_untagged_dimming_query(parsed.opcode, parsed.payload, parsed.payload_len) &&
             static_cast<uint32_t>(esphome::millis() - packet.received_ms) <= 1000) {
             zero_dimming_query_seen_ = true;

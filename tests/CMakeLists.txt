@@ -94,3 +94,14 @@ foreach(profile_test IN ITEMS controller_events absolute_dimmer local_dimmer mes
     target_link_libraries(test_${profile_test} PRIVATE ${ARDUINOJSON_TARGET})
     add_test(NAME ${profile_test} COMMAND test_${profile_test})
 endforeach()
+
+# Exercise both released-library fallback and additive observer API glue.
+foreach(rx_mode IN ITEMS legacy observer)
+    add_executable(test_controller_rx_${rx_mode} test_controller_rx.cpp)
+    target_include_directories(test_controller_rx_${rx_mode} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${COMPONENT_DIR})
+    target_compile_options(test_controller_rx_${rx_mode} PRIVATE -UNDEBUG)
+    if(rx_mode STREQUAL "observer")
+        target_compile_definitions(test_controller_rx_${rx_mode} PRIVATE AVIONMESH_TEST_RX_OBSERVER=1)
+    endif()
+    add_test(NAME controller_rx_${rx_mode} COMMAND test_controller_rx_${rx_mode})
+endforeach()
