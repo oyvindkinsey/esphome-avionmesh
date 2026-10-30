@@ -23,10 +23,11 @@ static_assert(CONTROLLER_OBSERVATION_HEADER + CONTROLLER_OBSERVATION_MAX_PAYLOAD
               ControllerPacketQueue::MAX_PACKET);
 
 inline void queue_controller_observation(ControllerPacketQueue &queue,
-                                         const ControllerObservation &message, uint32_t received_ms) {
+                                         const ControllerObservation &message,
+                                         uint32_t received_ms) {
     if (message.payload_len > CONTROLLER_OBSERVATION_MAX_PAYLOAD ||
         (message.payload_len && !message.payload)) {
-        queue.push(nullptr, 0, received_ms); // Count rejection without dereferencing input.
+        queue.push(nullptr, 0, received_ms);  // Count rejection without dereferencing input.
         return;
     }
     std::array<uint8_t, ControllerPacketQueue::MAX_PACKET> bytes{};
@@ -38,7 +39,8 @@ inline void queue_controller_observation(ControllerPacketQueue &queue,
         bytes[4 + i] = message.sequence >> (8 * i);
     bytes[8] = message.opcode;
     if (message.payload_len)
-        std::memcpy(bytes.data() + CONTROLLER_OBSERVATION_HEADER, message.payload, message.payload_len);
+        std::memcpy(bytes.data() + CONTROLLER_OBSERVATION_HEADER, message.payload,
+                    message.payload_len);
     queue.push(bytes.data(), CONTROLLER_OBSERVATION_HEADER + message.payload_len, received_ms);
 }
 
@@ -59,15 +61,16 @@ inline bool parse_controller_observation(const ControllerPacketQueue::Packet &pa
     return true;
 }
 
-template<typename NowFn>
-inline void install_controller_rx_observer(csrmesh::MeshContext &ctx,
-                                           ControllerPacketQueue &queue, NowFn now) {
+template <typename NowFn>
+inline void install_controller_rx_observer(csrmesh::MeshContext &ctx, ControllerPacketQueue &queue,
+                                           NowFn now) {
 #if defined(RECSRMESH_RX_OBSERVER_API) && RECSRMESH_RX_OBSERVER_API >= 1
     (void)now;
     csrmesh::set_rx_observer(ctx, [&queue](const csrmesh::RxMessage &message) {
         queue_controller_observation(queue,
-            {message.mcp_source, message.crypto_source, message.sequence, message.opcode,
-             message.payload, message.payload_len}, message.received_ms);
+                                     {message.mcp_source, message.crypto_source, message.sequence,
+                                      message.opcode, message.payload, message.payload_len},
+                                     message.received_ms);
     });
 #else
     // Released v1.1.3 lacks the observer API. Retain the existing internal MTL
@@ -81,4 +84,4 @@ inline void install_controller_rx_observer(csrmesh::MeshContext &ctx,
 #endif
 }
 
-} // namespace avionmesh
+}  // namespace avionmesh

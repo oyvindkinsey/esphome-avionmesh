@@ -79,6 +79,7 @@ class CloudScaleSampler {
         if (timer_)
             esp_timer_delete(timer_);
     }
+
  private:
     TaskHandle_t worker_;
     esp_timer_handle_t timer_{nullptr};
