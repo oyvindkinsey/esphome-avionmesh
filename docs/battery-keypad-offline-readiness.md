@@ -1,9 +1,9 @@
 # Battery keypad 126: offline readiness and staged acceptance
 
-This preparation contacts no device and starts no listener, button prompt,
-flash, upload or restart. All physical acceptance below remains pending until
-the owner starts the consolidated basement session. Host fixtures establish
-software behavior, not automatic programming or physical input delivery.
+The initial offline preparation contacted no device. The bounded hardware
+follow-up below was subsequently completed with the owner. Remaining checks
+stay pending; neither host fixtures nor a successful assignment read establish
+automatic programming support.
 
 ## Current capabilities
 
@@ -15,7 +15,7 @@ software behavior, not automatic programming or physical input delivery.
 | Shared-target presets/scenes | Generic commands remain usable; brightness percentages do not prove physical button identity |
 | Automatic or manual assignment writes | Unsupported; no experimental write path is enabled |
 | Automatic unused-slot HA targets | Unsupported; no groups are reserved for model 126 |
-| Sleep and first input delivery | Hardware acceptance pending; a read timeout does not mean empty or unsupported assignments |
+| Sleep and first input delivery | Native Button 1 after restart passed in one trial; broader sleep/auxiliary checks remain pending. A read timeout does not mean empty assignments |
 
 `controller_buttons` JSON and HA button `/mapping` attributes report
 `assignment_read_supported`, `assignment_write_supported`, `wake_required` and
@@ -71,10 +71,27 @@ an echoed transaction scheme. Source/shape/time guards reject queued pre-request
 and wrong-slot replies, but cannot prove that an otherwise matching newly received
 zero-tag reply was caused by a particular newly sent request. Full matching
 rounds are read evidence, not permission for battery programming. No battery
-writes are added by the multi-wake implementation; physical validation of it
-remains pending.
+writes are added by the multi-wake implementation. Its bounded two-wake read
+and cached-map restart behavior were subsequently validated below.
 
-## Owner-started read/event acceptance (pending)
+## Bounded hardware follow-up — October 30, 2026
+
+One paired product-126 keypad in native group-controller mode completed two
+full COUNT/four-slot rounds on separate authenticated wake windows. The owner
+pressed Power/Off, waited ten seconds, then pressed Power/Off again. Both rounds
+matched exactly; occupied count matched one native Button 1 and three unassigned
+slots. The bridge reported `saved`, made Button 1 available, and left Buttons
+2–4 unavailable. No controller assignment was written.
+
+The owner then operated Button 1 and Off. Native lights followed, and MQTT plus
+Home Assistant received named Button 1 and Off events. After a bridge power
+cycle, the saved map loaded and the same events/native control worked without
+another assignment read. Inventory, groups and exposure settings were preserved.
+This verifies the bounded read/cache path, not battery assignment programming.
+Battery Raise/Lower, wider sleep trials and unused-slot programming were not
+accepted by this test. Private captures and network identities are not included.
+
+## Broader owner-started acceptance (remaining scope)
 
 Record exact firmware/configuration, inventory product and authenticated source,
 raw packet timestamps, table requests/replies, MQTT/HA events and observed native

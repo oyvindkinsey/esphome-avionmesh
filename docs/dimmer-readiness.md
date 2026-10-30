@@ -65,3 +65,20 @@ it. It cannot resolve an unknown vendor assignment format by itself. Prior bridg
 relay recordings did not expose the vendor app's assignment writes; another
 identical passive relay recording is not sufficient evidence for implementing
 native programming. Silence on a read remains unknown, never an empty assignment.
+
+
+## Bounded hardware follow-up — October 30, 2026
+
+A claimed product-91 Accessory Dimmer in local input mode emitted distinct
+unchanged On/On/Off/Off reports and named Lower, Raise and Brightness events.
+After bridge power cycling, its input stayed unavailable until a fresh silent
+baseline, then repeated endpoint presses were received. This establishes the
+local report path; it does not establish native assignment clearing/programming.
+
+A paired product-81 touch slider retained its existing empty native target and
+Home Assistant Office automation. Endpoints and both ramp directions produced
+named events, and the first requested touch after a long idle interval arrived
+after bridge recovery. No native reassignment was performed. A spare unassigned
+81, native-91 shifted absolute hardware variants, and native assignment formats
+remain separate acceptance/research cases. These observations do not establish
+radio coverage or reliable delivery for every installation.
