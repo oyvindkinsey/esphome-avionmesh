@@ -64,6 +64,7 @@ set(SOURCES
     test_uuid_identity.cpp
     test_db_batch.cpp
     test_upstream_integration.cpp
+    test_controller_memory.cpp
 )
 
 add_executable(avionmesh_tests ${SOURCES})
@@ -106,4 +107,18 @@ foreach(rx_mode IN ITEMS legacy observer)
     endif()
     target_link_libraries(test_controller_rx_${rx_mode} PRIVATE Threads::Threads)
     add_test(NAME controller_rx_${rx_mode} COMMAND test_controller_rx_${rx_mode})
+endforeach()
+
+# Exercise ESP-IDF sampling through read-only API stubs, including disabled task metrics.
+foreach(stack_metrics IN ITEMS enabled disabled)
+    add_executable(test_controller_memory_${stack_metrics} test_controller_memory_platform.cpp)
+    target_include_directories(test_controller_memory_${stack_metrics} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory_platform_stubs ${COMPONENT_DIR})
+    target_compile_definitions(test_controller_memory_${stack_metrics} PRIVATE USE_ESP32)
+    if(stack_metrics STREQUAL "disabled")
+        target_compile_definitions(test_controller_memory_${stack_metrics} PRIVATE INCLUDE_uxTaskGetStackHighWaterMark=0)
+    endif()
+    target_compile_options(test_controller_memory_${stack_metrics} PRIVATE -UNDEBUG)
+    target_link_libraries(test_controller_memory_${stack_metrics} PRIVATE ${ARDUINOJSON_TARGET})
+    add_test(NAME controller_memory_${stack_metrics} COMMAND test_controller_memory_${stack_metrics})
 endforeach()

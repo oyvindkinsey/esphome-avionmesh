@@ -1,5 +1,6 @@
 #include "avionmesh_hub.h"
 #include "controller_rx.h"
+#include "controller_memory.h"
 #ifdef USE_ESP32
 #include "avionmesh_web.h"
 #endif
@@ -1693,6 +1694,8 @@ void AvionMeshHub::on_mqtt_command(const std::string &payload) {
             return true;
         }
         if (action == "controller_status") {
+            const auto memory = sample_controller_memory(esphome::millis());
+            const auto packet_queue = controller_packets_.status();
             auto json = esphome::json::build_json([&](JsonObject response) {
                 response["action"] = "controller_status";
                 response["mesh_ready"] = mesh_initialized_;
@@ -1701,7 +1704,44 @@ void AvionMeshHub::on_mqtt_command(const std::string &payload) {
                 response["expired"] = controller_events_expired_;
                 response["offline_dropped"] = controller_events_offline_;
                 response["publish_failed"] = controller_events_failed_;
-                response["packet_queue_dropped"] = controller_packets_.dropped();
+                response["packet_queue_dropped"] = packet_queue.dropped;
+                write_controller_memory(response["memory"].to<JsonObject>(), memory);
+                auto storage = response["controller_storage"].to<JsonObject>();
+                storage["inventory_devices"] = db_.devices().size();
+                storage["inventory_groups"] = db_.groups().size();
+                size_t controllers = 0;
+                for (const auto &device : db_.devices())
+                    controllers += is_controller(device.product_type);
+                storage["inventory_controllers"] = controllers;
+                auto maps = storage["map_entries"].to<JsonObject>();
+                maps["absolute_dimmer_streams"] = controller_dimmer_levels_.size();
+                maps["local_dimmer_streams"] = controller_local_levels_.size();
+                maps["slot_read_controllers"] = controller_slot_reads_.size();
+                maps["binding_refresh_statuses"] = binding_refresh_status_.size();
+                maps["keypad_setup_statuses"] = keypad_setup_status_.size();
+                auto snapshots = storage["snapshots"].to<JsonObject>();
+                snapshots["bindings_retained"] = controller_bindings_.size();
+                snapshots["bindings_valid"] = controller_bindings_.valid_count();
+                snapshots["binding_vector_capacity"] = controller_bindings_.capacity();
+                size_t slot_reads = 0;
+                for (const auto &[controller, slots] : controller_slot_reads_)
+                    for (const auto &slot : slots)
+                        slot_reads += !slot.raw.empty();
+                snapshots["slot_read_records"] = slot_reads;
+                snapshots["setup_plan_groups"] = keypad_setup_plan_.new_groups.size();
+                snapshots["setup_journal_groups"] = keypad_setup_journal_.plan.new_groups.size();
+                auto fixed = storage["fixed_storage"].to<JsonObject>();
+                fixed["units"] = "bytes";
+                fixed["accounting"] = "sizeof_embedded_objects_not_additional_heap";
+                fixed["packet_queue_object_bytes"] = sizeof(controller_packets_);
+                fixed["duplicate_window_object_bytes"] = sizeof(controller_duplicates_);
+                fixed["mesh_capture_object_bytes"] = sizeof(capture_);
+                fixed["binding_refresh_scratch_bytes"] =
+                    sizeof(binding_refresh_records_) + sizeof(binding_refresh_counts_);
+                auto queue = storage["packet_queue"].to<JsonObject>();
+                queue["capacity"] = ControllerPacketQueue::CAPACITY;
+                queue["maximum_packet_bytes"] = ControllerPacketQueue::MAX_PACKET;
+                queue["queued"] = packet_queue.queued;
                 auto levels = response["local_dimmers"].to<JsonArray>();
                 for (const auto &dev : db_.devices()) {
                     if (dev.product_type != 91 || !dev.ha_local_level)

@@ -104,6 +104,10 @@ class ControllerPacketQueue {
         uint8_t length{0};
         std::array<uint8_t, MAX_PACKET> bytes{};
     };
+    struct Status {
+        size_t queued;
+        uint32_t dropped;
+    };
     void push(const uint8_t *bytes, size_t length, uint32_t now) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!length || length > MAX_PACKET || count_ == CAPACITY) {
@@ -130,13 +134,14 @@ class ControllerPacketQueue {
         std::lock_guard<std::mutex> lock(mutex_);
         head_ = count_ = 0;
     }
-    uint32_t dropped() {
+    Status status() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return dropped_;
+        return {count_, dropped_};
     }
+    uint32_t dropped() const { return status().dropped; }
 
  private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::array<Packet, CAPACITY> packets_{};
     size_t head_{0}, count_{0};
     uint32_t dropped_{0};

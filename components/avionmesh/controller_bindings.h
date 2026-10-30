@@ -103,6 +103,13 @@ class ControllerBindings {
     }
     std::vector<uint8_t> encode() const;
     bool decode(const std::vector<uint8_t> &blob, const std::string &mesh_key);
+    size_t size() const { return snapshots_.size(); }
+    size_t capacity() const { return snapshots_.capacity(); }
+    size_t valid_count() const {
+        return static_cast<size_t>(
+            std::count_if(snapshots_.begin(), snapshots_.end(),
+                          [](const auto &snapshot) { return snapshot.valid; }));
+    }
 
  private:
     uint64_t mesh_tag_{0};
