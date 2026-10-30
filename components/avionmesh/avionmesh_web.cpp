@@ -1,5 +1,6 @@
 #include "avionmesh_web.h"
 #include "avionmesh_hub.h"
+#include "sse_initial_sync.h"
 #include "web_content.h"
 
 #include "esphome/core/log.h"
@@ -69,278 +70,68 @@ namespace avionmesh {
 // SseSession — buffered SSE connection (modeled on ESPHome AsyncEventSourceResponse)
 // ---------------------------------------------------------------------------
 
-SseSession::SseSession(httpd_handle_t hd, int fd) : hd_(hd), fd_(fd) {}
-
-void SseSession::destroy(void *ptr) {
-    auto *ses = static_cast<SseSession *>(ptr);
-    ses->fd_.store(0);
+void AvionMeshWebHandler::sse_free_context(void *ptr) {
+    delete static_cast<SseContext *>(ptr);
 }
 
-int SseSession::nonblocking_send(httpd_handle_t /*hd*/, int sockfd, const char *buf, size_t buf_len,
-                                 int /*flags*/) {
-    if (buf == nullptr)
+int AvionMeshWebHandler::nonblocking_send(httpd_handle_t, int fd, const char *buf, size_t len, int) {
+    if (!buf)
         return HTTPD_SOCK_ERR_INVALID;
-    int ret = ::send(sockfd, buf, buf_len, MSG_DONTWAIT);
-    if (ret < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return HTTPD_SOCK_ERR_TIMEOUT;
-        return HTTPD_SOCK_ERR_FAIL;
-    }
-    return ret;
+    const int result = ::send(fd, buf, len, MSG_DONTWAIT);
+    if (result < 0)
+        return errno == EAGAIN || errno == EWOULDBLOCK ? HTTPD_SOCK_ERR_TIMEOUT : HTTPD_SOCK_ERR_FAIL;
+    return result;
 }
 
-bool SseSession::send(const char *event, const std::string &data) {
-    if (fd_.load() == 0)
-        return false;
-
-    // Drain any pending buffer first
-    loop();
-    if (!send_buf_.empty())
-        return false;  // previous send still pending
-
-    // Build chunked SSE frame (matches ESPHome AsyncEventSourceResponse layout)
-    //
-    // HTTP chunked transfer encoding:
-    //   <hex-length>\r\n
-    //   <SSE payload>
-    //   \r\n
-    //
-    // Reserve 8 chars for hex length, filled in after payload is built.
-    static constexpr size_t HEADER_LEN = 10;  // "        \r\n"
-    send_buf_.reserve(data.size() + 64);
-    send_buf_.assign("        \r\n");
-
-    if (event && *event) {
-        send_buf_ += "event: ";
-        send_buf_ += event;
-        send_buf_ += "\r\n";
-    }
-    send_buf_ += "data: ";
-    send_buf_ += data;
-    send_buf_ += "\r\n\r\n";  // data CRLF + blank-line terminator
-
-    send_buf_ += "\r\n";  // chunk-terminating CRLF
-
-    // Backfill hex chunk length (payload between header CRLF and trailing CRLF)
-    int chunk_len = static_cast<int>(send_buf_.size()) - HEADER_LEN - 2;
-    char len_str[9];
-    snprintf(len_str, sizeof(len_str), "%08x", chunk_len);
-    memcpy(send_buf_.data(), len_str, 8);
-
-    bytes_sent_ = 0;
-    loop();
-    return true;
+void AvionMeshWebHandler::sse_drain_work(void *arg) {
+    auto *handler = static_cast<AvionMeshWebHandler *>(arg);
+    handler->sse_sessions_.drain(
+        [](const SseSession &session, const char *data, size_t length) {
+            return httpd_socket_send(reinterpret_cast<httpd_handle_t>(session.server), session.fd,
+                                     data, length, 0);
+        },
+        [](const SseSession &session) {
+            return httpd_sess_trigger_close(reinterpret_cast<httpd_handle_t>(session.server),
+                                             session.fd) == ESP_OK;
+        }, HTTPD_SOCK_ERR_TIMEOUT);
+    handler->sse_sessions_.finish_work();
 }
-
-void SseSession::loop() {
-    if (send_buf_.empty() || fd_.load() == 0)
-        return;
-
-    if (bytes_sent_ == send_buf_.size()) {
-        send_buf_.clear();
-        bytes_sent_ = 0;
-        return;
-    }
-
-    size_t remaining = send_buf_.size() - bytes_sent_;
-    int ret = httpd_socket_send(hd_, fd_.load(), send_buf_.c_str() + bytes_sent_, remaining, 0);
-    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-        if (++consecutive_failures_ >= MAX_FAILURES) {
-            ESP_LOGW(TAG, "SSE session stuck, closing");
-            fd_.store(0);
-            send_buf_.clear();
-        }
-        return;
-    }
-    if (ret <= 0)
-        return;
-
-    consecutive_failures_ = 0;
-    bytes_sent_ += ret;
-
-    if (bytes_sent_ == send_buf_.size()) {
-        send_buf_.clear();
-        bytes_sent_ = 0;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// AvionMeshWebHandler — SSE broadcast / sync
-// ---------------------------------------------------------------------------
 
 void AvionMeshWebHandler::send_event(const char *event, const std::string &data) {
-    for (auto *ses : sse_sessions_) {
-        ses->send(event, data);
-    }
+    sse_sessions_.broadcast(event, data);
 }
 
 void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
-    auto &db = hub_->db_;
-    auto &states = hub_->device_states_;
-
-    // Meta event
-    {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "{\"ble_state\":%u,\"mesh_initialized\":%s,\"rx_count\":%u}",
-                 static_cast<uint8_t>(hub_->ble_state_), hub_->mesh_initialized_ ? "true" : "false",
-                 static_cast<unsigned>(hub_->rx_count_));
-        session->send("meta", buf);
-        if (session->dead())
-            return;
-    }
-
-    // Devices in batches of 5
-    {
-        auto &devs = db.devices();
-        static constexpr size_t BATCH = 5;
-        for (size_t i = 0; i < devs.size(); i += BATCH) {
-            std::string json = "{\"devices\":[";
-            size_t end = std::min(i + BATCH, devs.size());
-            for (size_t j = i; j < end; j++) {
-                auto &dev = devs[j];
-                if (j > i)
-                    json += ",";
-                json += "{\"avion_id\":";
-                json += std::to_string(dev.avion_id);
-                json += ",\"name\":\"";
-                json += dev.name;
-                json += "\",\"product_type\":";
-                json += std::to_string(dev.product_type);
-                json += ",\"product_name\":\"";
-                json += is_controller(dev.product_type) ? controller_name(dev.product_type)
-                                                        : product_name(dev.product_type);
-                json += "\",\"is_controller\":";
-                json += is_controller(dev.product_type) ? "true" : "false";
-                json += ",\"groups\":[";
-                for (size_t g = 0; g < dev.groups.size(); g++) {
-                    if (g > 0)
-                        json += ",";
-                    json += std::to_string(dev.groups[g]);
-                }
-                json += "],\"mqtt_exposed\":";
-                json += dev.mqtt_exposed ? "true" : "false";
-                json += ",\"ha_setup_pending\":";
-                json += dev.ha_setup_pending ? "true" : "false";
-                json += ",\"ha_local_level\":";
-                json += dev.ha_local_level ? "true" : "false";
-                json += ",\"ha_input_status\":\"";
-                json += hub_->controller_input_status(dev.avion_id);
-                json += "\"";
-                if (dimmer_profile(dev.product_type).supported) {
-                    json += ",\"ha_input_mode\":\"";
-                    json += dimmer_input_mode(dev.product_type, dev.ha_local_level);
-                    json += "\",\"ha_native_assignment_status\":\"unknown\"";
-                    json += ",\"ha_native_assignment_programming\":false";
-                }
-                json += ",\"has_dimming\":";
-                json += has_dimming(dev.product_type) ? "true" : "false";
-                json += ",\"has_color_temp\":";
-                json += has_color_temp(dev.product_type) ? "true" : "false";
-
-                auto sit = states.find(dev.avion_id);
-                if (!is_controller(dev.product_type) && sit != states.end() &&
-                    sit->second.brightness_known) {
-                    json += ",\"brightness\":";
-                    json += std::to_string(sit->second.brightness);
-                    if (sit->second.color_temp_known) {
-                        json += ",\"color_temp\":";
-                        json += std::to_string(sit->second.color_temp);
-                    }
-                }
-                json += "}";
-            }
-            json += "]}";
-            session->send("devices", json);
-            if (session->dead())
-                return;
-        }
-    }
-
-    // Saved per-controller button maps are separate from light/group metadata.
-    for (const auto &dev : db.devices()) {
-        if (is_controller(dev.product_type)) {
-            session->send("controller_buttons", hub_->controller_bindings_json(dev.avion_id));
-            if (session->dead())
-                return;
-        }
-    }
-
-    // Groups in batches of 5
-    {
-        auto &grps = db.groups();
-        static constexpr size_t BATCH = 5;
-        for (size_t i = 0; i < grps.size(); i += BATCH) {
-            std::string json = "{\"groups\":[";
-            size_t end = std::min(i + BATCH, grps.size());
-            for (size_t j = i; j < end; j++) {
-                auto &grp = grps[j];
-                if (j > i)
-                    json += ",";
-                json += "{\"group_id\":";
-                json += std::to_string(grp.group_id);
-                json += ",\"name\":\"";
-                json += grp.name;
-                json += "\",\"members\":[";
-                for (size_t m = 0; m < grp.member_ids.size(); m++) {
-                    if (m > 0)
-                        json += ",";
-                    json += std::to_string(grp.member_ids[m]);
-                }
-                json += "],\"mqtt_exposed\":";
-                json += grp.mqtt_exposed ? "true" : "false";
-                json += ",\"ha_event_target\":";
-                json += grp.ha_event_target ? "true" : "false";
-                json += "}";
-            }
-            json += "]}";
-            session->send("groups", json);
-            if (session->dead())
-                return;
-        }
-    }
-
-    // Mesh broadcast entity status
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "{\"mesh_mqtt_exposed\":%s}",
-                 hub_->mesh_mqtt_exposed_ ? "true" : "false");
-        session->send("mesh_status", buf);
-        if (session->dead())
-            return;
-    }
-
-    session->send("sync_complete", "{}");
-    session->sync_pending = false;
+    char meta[128];
+    snprintf(meta, sizeof(meta), "{\"ble_state\":%u,\"mesh_initialized\":%s,\"rx_count\":%u}",
+             static_cast<uint8_t>(hub_->ble_state_), hub_->mesh_initialized_ ? "true" : "false",
+             static_cast<unsigned>(hub_->rx_count_));
+    send_sse_initial_sync(session, hub_->db_, hub_->device_states_, meta, hub_->mesh_mqtt_exposed_,
+        [this](uint16_t id) { return hub_->controller_bindings_json(id); },
+        [this](uint16_t id) { return hub_->controller_input_status(id); });
 }
 
 void AvionMeshWebHandler::reset_sync() {
-    for (auto *ses : sse_sessions_)
-        ses->sync_pending = true;
+    sse_sessions_.reset_sync();
 }
 
 void AvionMeshWebHandler::sse_loop() {
     bool did_sync = false;
-
-    // Drain buffers, remove dead sessions, sync new ones
-    for (size_t i = 0; i < sse_sessions_.size();) {
-        auto *ses = sse_sessions_[i];
-        ses->loop();
-        if (ses->dead()) {
-            ESP_LOGD(TAG, "Removing dead SSE session");
-            delete ses;
-            sse_sessions_[i] = sse_sessions_.back();
-            sse_sessions_.pop_back();
-            continue;
+    httpd_handle_t server = nullptr;
+    sse_sessions_.visit([&](SseSession &session) {
+        server = reinterpret_cast<httpd_handle_t>(session.server);
+        if (session.sync_pending) {
+            send_initial_sync(&session);
+            did_sync = did_sync || !session.sync_pending;
         }
-        if (ses->sync_pending) {
-            send_initial_sync(ses);
-            did_sync = true;
-        }
-        ++i;
-    }
-
+    });
+    // All socket I/O, session lookup and asynchronous close scheduling run on
+    // HTTPD's task, serialized with its native socket/context cleanup.
+    sse_sessions_.schedule(reinterpret_cast<uintptr_t>(server), [this](uintptr_t handle) {
+        return httpd_queue_work(reinterpret_cast<httpd_handle_t>(handle), sse_drain_work, this) == ESP_OK;
+    });
     if (did_sync && hub_->mesh_initialized_) {
-        uint32_t now = esphome::millis();
+        const uint32_t now = esphome::millis();
         if (now - last_state_read_ms_ > 10000) {
             last_state_read_ms_ = now;
             hub_->read_all_dimming();
@@ -509,28 +300,28 @@ void AvionMeshWebHandler::handle_index(AsyncWebServerRequest *request) {
 void AvionMeshWebHandler::handle_events(AsyncWebServerRequest *request) {
     httpd_req_t *req = *request;
 
-    // Evict oldest session if at capacity
-    while (sse_sessions_.size() >= MAX_SSE_SESSIONS) {
-        auto *old = sse_sessions_.front();
-        delete old;
-        sse_sessions_.erase(sse_sessions_.begin());
+    auto session = sse_sessions_.accept(reinterpret_cast<uintptr_t>(req->handle),
+                                         httpd_req_to_sockfd(req));
+    if (!session) {
+        send_error(request, 503, "too_many_event_streams");
+        return;
     }
-
+    // IDF owns this independent shared reference until free_ctx runs. Manager
+    // cleanup/overflow never deletes the context to which IDF still points.
+    req->sess_ctx = new SseContext(session);
+    req->free_ctx = sse_free_context;
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "text/event-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
-
-    httpd_resp_send_chunk(req, "\r\n", 2);
-
-    int fd = httpd_req_to_sockfd(req);
-    auto *ses = new SseSession(req->handle, fd);
-    req->sess_ctx = ses;
-    req->free_ctx = SseSession::destroy;
-
-    httpd_sess_set_send_override(req->handle, fd, SseSession::nonblocking_send);
-
-    sse_sessions_.push_back(ses);
+    if (httpd_resp_send_chunk(req, "\r\n", 2) != ESP_OK) {
+        sse_sessions_.visit([&](SseSession &entry) {
+            if (&entry == session.get())
+                entry.close();
+        });
+        return;
+    }
+    httpd_sess_set_send_override(req->handle, session->fd, nonblocking_send);
 }
 
 void AvionMeshWebHandler::handle_discover_mesh_post(AsyncWebServerRequest *request) {

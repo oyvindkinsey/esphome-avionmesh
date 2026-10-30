@@ -2,6 +2,8 @@
 
 #include "esphome/components/web_server_base/web_server_base.h"
 
+#include "sse_sessions.h"
+
 #include <atomic>
 #include <string>
 #include <vector>
@@ -10,32 +12,7 @@ namespace avionmesh {
 
 class AvionMeshHub;
 
-class SseSession {
- public:
-    SseSession(httpd_handle_t hd, int fd);
-
-    bool send(const char *event, const std::string &data);
-    void loop();
-    bool dead() const { return fd_.load() == 0; }
-
-    bool sync_pending{true};
-
-    // Public statics used by handle_events to set up the httpd session
-    static void destroy(void *ptr);
-    static int nonblocking_send(httpd_handle_t hd, int sockfd, const char *buf, size_t buf_len,
-                                int flags);
-
- private:
-    httpd_handle_t hd_;
-    std::atomic<int> fd_{0};
-    std::string send_buf_;
-    size_t bytes_sent_{0};
-    uint16_t consecutive_failures_{0};
-    static constexpr uint16_t MAX_FAILURES = 2500;  // ~20 s at 125 Hz
-};
-
 class AvionMeshWebHandler : public AsyncWebHandler {
-    static constexpr size_t MAX_SSE_SESSIONS = 3;
 
  public:
     AvionMeshWebHandler(AvionMeshHub *hub) : hub_(hub) {}
@@ -53,7 +30,10 @@ class AvionMeshWebHandler : public AsyncWebHandler {
  protected:
     AvionMeshHub *hub_;
 
-    std::vector<SseSession *> sse_sessions_;
+    SseSessions sse_sessions_;
+    static void sse_drain_work(void *arg);
+    static void sse_free_context(void *ptr);
+    static int nonblocking_send(httpd_handle_t hd, int fd, const char *buf, size_t len, int flags);
     uint32_t last_state_read_ms_{0};
 
     std::string read_body(AsyncWebServerRequest *request);

@@ -124,3 +124,10 @@ foreach(stack_metrics IN ITEMS enabled disabled)
     target_link_libraries(test_controller_memory_${stack_metrics} PRIVATE ${ARDUINOJSON_TARGET})
     add_test(NAME controller_memory_${stack_metrics} COMMAND test_controller_memory_${stack_metrics})
 endforeach()
+# Actual production SSE queue, shared-context lifetime and paced serializer.
+add_executable(test_sse_sessions test_sse_sessions.cpp ${AVIONMESH_LIB}/src/types.cpp)
+target_include_directories(test_sse_sessions PRIVATE ${COMPONENT_DIR} ${AVIONMESH_LIB}/include)
+target_compile_options(test_sse_sessions PRIVATE -UNDEBUG)
+target_link_libraries(test_sse_sessions PRIVATE ${ARDUINOJSON_TARGET} Threads::Threads)
+add_test(NAME sse_sessions COMMAND test_sse_sessions)
+

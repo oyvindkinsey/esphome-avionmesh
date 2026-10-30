@@ -15,7 +15,7 @@ All endpoints: `POST`, `Content-Type: application/json`, except `/api/events`.
 
 | Path | Action |
 |------|--------|
-| `GET /api/events` | SSE stream (max 2 concurrent sessions) |
+| `GET /api/events` | SSE stream (max 3 concurrent sessions; extra clients receive HTTP 503) |
 | `POST /api/control` | Set brightness and/or color temp for a device/group |
 | `POST /api/discover_mesh` | Trigger mesh ping scan |
 | `POST /api/scan_unassociated` | Scan for unassociated BLE devices |
@@ -63,3 +63,64 @@ Emitted to all connected clients. An initial sync is sent to each new client on 
 | `mqtt_toggled` | `id`, `mqtt_exposed` |
 | `save_result` | _(none)_ |
 | `debug` | string |
+
+
+## SSE delivery and connection lifetime
+
+The component keeps at most three SSE sessions, including closing sessions until
+HTTPD releases their contexts. A fourth connection receives HTTP 503; opening a
+new view does not delete an existing monitor or leave its socket silently idle.
+The existing browser EventSource retry behavior can reconnect after capacity is
+available. The endpoint and event schemas are unchanged.
+
+Each session has a FIFO bounded by 16 frames and 8192 total retained wire bytes.
+Partial writes and temporary EAGAIN retain the current frame and later events in
+order. Fatal send errors, persistent timeout attempts, an oversized individual
+frame, or queue overflow request asynchronous socket close. A successful close
+request is queued once; a full/stopping HTTPD work mailbox may fail and is retried.
+No event is silently skipped while the connection is advertised as healthy.
+Overflow is an explicit disconnect/resync policy, not durable event delivery.
+Clients that need a complete current inventory must reconnect and receive a new
+snapshot after disconnect; transient physical command events are never replayed.
+
+Initial sync is paced: at most one frame is added per main-loop turn, and its
+cursor waits for pending output to drain. Devices retain batches of five; groups
+use one group per frame so dense membership arrays remain below the same byte
+bound. The existing UI merges each `groups` batch by group ID. A cursor advances
+only after enqueue succeeds, and `sync_complete` follows every accepted snapshot
+frame in the same FIFO. An oversized single record closes the stream instead of
+skipping it or claiming snapshot completion. A snapshot is assembled over time,
+with the existing live update events interleaved; it is not a transactional copy
+of the entire database.
+
+Main-loop snapshot/event producers, connection admission and queue draining share
+a manager mutex. Socket sends, session lookup and close requests run on HTTPD's
+own task through `httpd_queue_work`, serialized with IDF socket/context cleanup.
+`CONFIG_HTTPD_QUEUE_WORK_BLOCKING` is disabled: a full work mailbox must fail for
+retry rather than deadlock the HTTPD task waiting on itself. The API and setting
+were checked in the cached IDF 5.5.5 and 5.5.6 sources. Queue submissions use the
+permanent component handler as their argument; no per-work heap context is leaked
+when the server stops before executing queued work.
+
+IDF's `sess_ctx` owns a separate shared reference to each session. Its `free_ctx`
+callback releases that reference and atomically signals cleanup. Manager removal,
+server-stop cleanup, or a failed close-queue attempt cannot destroy an object to
+which IDF still holds a reference. The handler has the normal firmware-long
+component lifetime; this does not add dynamic component/server destruction APIs.
+
+The byte cap is a wire-payload bound, not an ESP32 heap measurement. Strings,
+FIFO nodes, shared-reference control blocks, the session/context objects and
+allocator bookkeeping add overhead. Frame construction and initial-sync JSON
+serialization also allocate temporary strings outside the retained byte count.
+Buffers allocate on demand; three active sessions can retain at most 24 KiB of
+wire frames plus that overhead. Before/after heap measurements remain a separate
+hardware exercise.
+
+`test_sse_sessions` compiles the same production queue, lifetime, scheduler and
+paced serializer code with fake transport operations. It checks partial writes,
+EAGAIN and ordered waiting/reading/saved delivery; fatal errors and close retries;
+byte/frame overflow; reject-new capacity; delayed free-context and server-stop
+ownership; work-mailbox retry; concurrent admission/broadcast/drain/cleanup; and
+complete 19-device/10-group, 81/16, and dense 200/40 snapshots (8000 memberships).
+Address/undefined-behavior and thread sanitizers are suitable offline checks;
+these fixtures do not claim device/socket timing or live browser validation.
