@@ -3,6 +3,7 @@
 
 Host runs verify fixture/transport behavior only, not firmware parsing, heap, stack or NVS.
 """
+
 import argparse
 import contextlib
 import hashlib
@@ -16,9 +17,9 @@ import tempfile
 import threading
 from pathlib import Path
 
-from cloud_scale_fixtures import (LOCATION_PID, SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD, TOKEN,
-                         encode)
+from cloud_scale_fixtures import SYNTHETIC_EMAIL, SYNTHETIC_PASSWORD, TOKEN, encode
 from fake_cloud_tls import create_server
+
 
 def make_cert(folder, host):
     """Short-lived self-signed test trust anchor with explicit SAN; never disable verification."""
@@ -35,13 +36,33 @@ def make_cert(folder, host):
             raise ValueError("invalid certificate host")
         san = f"DNS:{host}"
     config = folder / "openssl.cnf"
-    config.write_text(f"[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-                      f"[dn]\nCN={host}\n[ext]\nsubjectAltName={san}\n"
-                      "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\n"
-                      "extendedKeyUsage=serverAuth\n")
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "7",
-                    "-keyout", str(key), "-out", str(cert), "-config", str(config)],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    config.write_text(
+        f"[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
+        f"[dn]\nCN={host}\n[ext]\nsubjectAltName={san}\n"
+        "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\n"
+        "extendedKeyUsage=serverAuth\n"
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "7",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-config",
+            str(config),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
     key.chmod(0o600)
     return cert, key
 
@@ -60,8 +81,9 @@ def serving(cert, key, **kwargs):
 
 
 def request(server, context, path, login=False, timeout=2, credentials=None):
-    connection = http.client.HTTPSConnection("127.0.0.1", server.server_port,
-                                            context=context, timeout=timeout)
+    connection = http.client.HTTPSConnection(
+        "127.0.0.1", server.server_port, context=context, timeout=timeout
+    )
     headers = {"Authorization": f"Token {TOKEN}"}
     data = None
     if login:
@@ -83,8 +105,12 @@ def request(server, context, path, login=False, timeout=2, credentials=None):
             raise ValueError("cloud_response_too_large")
         if response.status not in (200, 201):
             raise ValueError(f"http_{response.status}")
-        return json.loads(body), {"path": path, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
-                                  "tls": tls}
+        return json.loads(body), {
+            "path": path,
+            "bytes": len(body),
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "tls": tls,
+        }
     finally:
         connection.close()
 
@@ -92,10 +118,12 @@ def request(server, context, path, login=False, timeout=2, credentials=None):
 def sync_probe(server, context, existing=None):
     """Host shape/integrity oracle only; C++ validation remains separately tested."""
     trace = []
+
     def fetch(path, login=False):
         body, record = request(server, context, path, login)
         trace.append(record)
         return body
+
     assert fetch("sessions", True)["credentials"]["auth_token"] == TOKEN
     locations = fetch("user/locations")["locations"]
     assert len(locations) == 1
@@ -117,37 +145,64 @@ def sync_probe(server, context, existing=None):
         members += len(detail["devices"])
     candidate = {"devices": ids, "groups": {group["avid"] for group in groups}}
     existing = existing or {"devices": set(), "groups": set()}
-    return candidate, {"requests": trace, "devices": len(ids), "groups": len(groups), "memberships": members,
-                       "added_devices": len(ids - existing["devices"]),
-                       "added_groups": len(candidate["groups"] - existing["groups"])}
+    return candidate, {
+        "requests": trace,
+        "devices": len(ids),
+        "groups": len(groups),
+        "memberships": members,
+        "added_devices": len(ids - existing["devices"]),
+        "added_groups": len(candidate["groups"] - existing["groups"]),
+    }
 
 
 def offline_report(cert, key):
     context = ssl.create_default_context(cafile=str(cert))
-    report = {"schema": 1, "scope": "host HTTPS and fixture checks only", "esp32_measurements": None,
-              "scenarios": [], "failures": {}}
-    for name, count, groups, members in [("minimum", 76, 16, 4), ("larger_sparse", 200, 40, 1),
-                                         ("larger_dense", 200, 40, 200), ("parser_boundary", 512, 128, 1)]:
+    report = {
+        "schema": 1,
+        "scope": "host HTTPS and fixture checks only",
+        "esp32_measurements": None,
+        "scenarios": [],
+        "failures": {},
+    }
+    for name, count, groups, members in [
+        ("minimum", 76, 16, 4),
+        ("larger_sparse", 200, 40, 1),
+        ("larger_dense", 200, 40, 200),
+        ("parser_boundary", 512, 128, 1),
+    ]:
         # Isolate the parser count boundary from the independent response byte cap.
         metadata_bytes = 0 if name == "parser_boundary" else 448
-        with serving(cert, key, devices=count, groups=groups, members=members,
-                     metadata_bytes=metadata_bytes) as server:
+        with serving(
+            cert, key, devices=count, groups=groups, members=members, metadata_bytes=metadata_bytes
+        ) as server:
             existing = None
             runs = []
             for _ in range(3):
                 existing, result = sync_probe(server, context, existing)
                 runs.append(result)
             assert runs[1]["added_devices"] == runs[1]["added_groups"] == 0
-            report["scenarios"].append({"name": name, "fixture": server.inventory_manifest, "runs": runs})
-    for fault, expected in [("unauthorized", "http_401"), ("redirect", "http_302"),
-                            ("malformed", "JSONDecodeError"), ("oversize", "cloud_response_too_large"),
-                            ("disconnect", "IncompleteRead"), ("slow", "TimeoutError"),
-                            ("duplicate-id", "duplicate_device_id"), ("unresolved-member", "unresolved_group_member")]:
+            report["scenarios"].append(
+                {"name": name, "fixture": server.inventory_manifest, "runs": runs}
+            )
+    for fault, expected in [
+        ("unauthorized", "http_401"),
+        ("redirect", "http_302"),
+        ("malformed", "JSONDecodeError"),
+        ("oversize", "cloud_response_too_large"),
+        ("disconnect", "IncompleteRead"),
+        ("slow", "TimeoutError"),
+        ("duplicate-id", "duplicate_device_id"),
+        ("unresolved-member", "unresolved_group_member"),
+    ]:
         with serving(cert, key, fault=fault, slow_seconds=2.2) as server:
             try:
                 sync_probe(server, context)
             except (ValueError, http.client.IncompleteRead, TimeoutError) as error:
-                actual = str(error) if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError) else type(error).__name__
+                actual = (
+                    str(error)
+                    if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError)
+                    else type(error).__name__
+                )
                 assert actual == expected, (fault, actual, expected)
                 report["failures"][fault] = actual
             else:
@@ -161,11 +216,15 @@ def offline_report(cert, key):
         else:
             raise AssertionError("parser cap not rejected")
     with serving(cert, key) as server:
-        for name, probe_context in [("untrusted_ca", ssl.create_default_context()),
-                                    ("hostname_mismatch", ssl.create_default_context(cafile=str(cert)))]:
+        for name, probe_context in [
+            ("untrusted_ca", ssl.create_default_context()),
+            ("hostname_mismatch", ssl.create_default_context(cafile=str(cert))),
+        ]:
             if name == "hostname_mismatch":
                 # SAN has only 127.0.0.1, so localhost must fail even though it resolves locally.
-                conn = http.client.HTTPSConnection("localhost", server.server_port, context=probe_context)
+                conn = http.client.HTTPSConnection(
+                    "localhost", server.server_port, context=probe_context
+                )
                 try:
                     conn.request("GET", "/user/locations")
                 except ssl.SSLCertVerificationError:
@@ -182,7 +241,13 @@ def offline_report(cert, key):
                 else:
                     raise AssertionError(name)
         try:
-            request(server, context, "sessions", True, credentials={"email": "real@example.com", "password": "not-accepted"})
+            request(
+                server,
+                context,
+                "sessions",
+                True,
+                credentials={"email": "real@example.com", "password": "not-accepted"},
+            )
         except ValueError as error:
             assert str(error) == "http_401"
             report["failures"]["nonsynthetic_login"] = str(error)
@@ -192,10 +257,10 @@ def offline_report(cert, key):
 def collect_logs(path):
     samples = []
     for line in Path(path).read_text(errors="replace").splitlines():
-        marker = 'CLOUD_SCALE {'
+        marker = "CLOUD_SCALE {"
         if marker in line:
             # ESPHome may append an ANSI color reset after the JSON object.
-            payload = line[line.index(marker) + len('CLOUD_SCALE '):]
+            payload = line[line.index(marker) + len("CLOUD_SCALE ") :]
             samples.append(json.JSONDecoder().raw_decode(payload)[0])
     if not samples:
         raise ValueError("no CLOUD_SCALE JSON samples found")
@@ -207,7 +272,9 @@ def main():
     parser.add_argument("--make-cert", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--logs", type=Path, help="Collect captured serial/log output; no device connection")
+    parser.add_argument(
+        "--logs", type=Path, help="Collect captured serial/log output; no device connection"
+    )
     args = parser.parse_args()
     if args.make_cert:
         cert, key = make_cert(args.make_cert, args.host)

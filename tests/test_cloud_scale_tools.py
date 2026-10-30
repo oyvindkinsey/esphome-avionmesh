@@ -1,7 +1,9 @@
 """Pure fixture tests; HTTPS roundtrips run via cloud_scale_report.py."""
+
 import sys
 import unittest
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from cloud_scale import make_inventory as upstream
 from cloud_scale_fixtures import make_inventory, manifest

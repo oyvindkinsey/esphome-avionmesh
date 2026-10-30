@@ -7,16 +7,16 @@ Reconnects automatically on disconnect.
 import base64
 import binascii
 import gzip
-import os
 import json
+import os
 from urllib.parse import urlsplit
-from esphome.core import CORE
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import esp32, esp32_ble
 from esphome.components.esp32 import add_idf_sdkconfig_option
 from esphome.const import CONF_ID
+from esphome.core import CORE
 
 DEPENDENCIES = ["esp32", "mqtt"]
 AUTO_LOAD = ["json", "esp32_ble", "web_server_base"]
@@ -32,18 +32,30 @@ def validate_scale_url(value):
         port = parsed.port
     except ValueError as error:
         raise cv.Invalid("invalid test HTTPS port") from error
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.path not in ("", "/") or parsed.query or parsed.fragment
-            or any(c.isspace() for c in value) or (port is not None and port == 0)):
-        raise cv.Invalid("experimental cloud scale requires an HTTPS origin without credentials/path/query")
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or any(c.isspace() for c in value)
+        or (port is not None and port == 0)
+    ):
+        raise cv.Invalid(
+            "experimental cloud scale requires an HTTPS origin without credentials/path/query"
+        )
     return value.rstrip("/") + "/"
 
 
-CLOUD_SCALE_SCHEMA = cv.Schema({
-    cv.Required("url"): validate_scale_url,
-    cv.Required("ca_certificate"): cv.file_,
-    cv.Optional("persist", default=False): cv.boolean,
-})
+CLOUD_SCALE_SCHEMA = cv.Schema(
+    {
+        cv.Required("url"): validate_scale_url,
+        cv.Required("ca_certificate"): cv.file_,
+        cv.Optional("persist", default=False): cv.boolean,
+    }
+)
 
 
 def validate_passphrase(value):
