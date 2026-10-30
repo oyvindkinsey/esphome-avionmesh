@@ -12,6 +12,11 @@ std::string AvionMeshHub::controller_bindings_json(uint16_t target) {
     const auto *snapshot = controller_bindings_.find(target);
     return esphome::json::build_json([&](JsonObject root) {
         root["controller_id"] = target;
+        const uint8_t product = dev ? dev->product_type : 0;
+        root["assignment_read_supported"] = keypad_assignment_model_supported(product);
+        root["assignment_write_supported"] = keypad_assignment_write_supported(product);
+        root["wake_required"] = product == 126;
+        root["programming_status"] = keypad_programming_status(product);
         root["read_only"] = !(keypad_setup_active_ && keypad_setup_target_ == target);
         root["setup_status"] = keypad_setup_status(target);
         root["setup_busy"] = keypad_setup_active_ && keypad_setup_target_ == target;

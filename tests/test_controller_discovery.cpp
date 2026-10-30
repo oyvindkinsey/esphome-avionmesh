@@ -68,14 +68,23 @@ int main() {
     snapshot.product = 126;
     discovery.publish_controller_actions(40003, 126, "Battery Keypad", &snapshot);
     bool battery_button1_ready = false, battery_button4_unassigned = false;
+    unsigned battery_mapping_attributes = 0;
     for (const auto &[topic, payload, retained] : messages) {
         assert(retained);
+        if (topic.find("/mapping") != std::string::npos) {
+            assert(!deserializeJson(doc, payload));
+            assert(doc["assignment_read_supported"] == true);
+            assert(doc["assignment_write_supported"] == false);
+            assert(doc["wake_required"] == true);
+            assert(doc["programming_status"] == "programming_unverified");
+            ++battery_mapping_attributes;
+        }
         if (topic == "test_bridge/controller/40003/action/button_1/availability")
             battery_button1_ready = payload == "online";
         if (topic == "test_bridge/controller/40003/action/button_4/availability")
             battery_button4_unassigned = payload == "offline";
     }
-    assert(battery_button1_ready && battery_button4_unassigned);
+    assert(battery_button1_ready && battery_button4_unassigned && battery_mapping_attributes == 4);
     messages.clear();
     discovery.publish_controller_actions(40002, 81, "Anywhere", nullptr);
     for (const auto &[topic, payload, retained] : messages)

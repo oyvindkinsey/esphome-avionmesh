@@ -29,11 +29,22 @@ inline bool valid_binding_records(const ControllerSlotRecords &records) {
 inline bool keypad_assignment_model_supported(uint8_t product) {
     return product == 127 || product == 126;
 }
+inline bool keypad_assignment_write_supported(uint8_t product) {
+    // Battery app writes have been observed, but automatic write/readback/restore
+    // and physical operation have not been established for model 126.
+    return product == 127;
+}
+inline const char *keypad_programming_status(uint8_t product) {
+    return product == 127 ? "supported" : product == 126 ? "programming_unverified"
+                                                         : "model_unverified";
+}
 // Observed battery Power/Off wake indication. Require a fresh authenticated
 // source packet at the call site; cached or ordinary brightness packets do not arm reads.
 inline bool battery_keypad_wake_packet(uint8_t opcode, const uint8_t *payload, size_t length,
                                        uint32_t received, uint32_t now) {
-    return opcode == 0x73 && payload && length == 7 && payload[0] == 0x0b && payload[1] == 0x1c &&
+    static constexpr std::array<uint8_t, 7> observed{0x0b, 0x1c, 1, 0x0b, 5, 100, 1};
+    return opcode == 0x73 && payload && length == observed.size() &&
+           std::equal(observed.begin(), observed.end(), payload) &&
            static_cast<uint32_t>(now - received) <= 1000;
 }
 inline const char *binding_slot_status(const ControllerBindingSnapshot *snapshot, uint8_t product,

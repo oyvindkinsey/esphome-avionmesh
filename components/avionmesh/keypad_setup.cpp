@@ -12,6 +12,9 @@ std::string AvionMeshHub::keypad_setup_status(uint16_t target) const {
         return found->second;
     if (keypad_setup_journal_.active && keypad_setup_journal_.controller == target)
         return "interrupted_needs_reconciliation";
+    const auto *device = db_.find_device(target);
+    if (device && !keypad_assignment_write_supported(device->product_type))
+        return keypad_programming_status(device->product_type);
     const auto *snapshot = controller_bindings_.find(target);
     if (snapshot && snapshot->valid) {
         bool ready = true;
@@ -38,8 +41,8 @@ void AvionMeshHub::finish_keypad_setup(const std::string &status) {
 }
 void AvionMeshHub::start_keypad_setup(uint16_t target, bool manual) {
     auto *dev = db_.find_device(target);
-    if (!dev || dev->product_type != 127) {
-        keypad_setup_status_[target] = "model_unverified";
+    if (!dev || !keypad_assignment_write_supported(dev->product_type)) {
+        keypad_setup_status_[target] = keypad_programming_status(dev ? dev->product_type : 0);
         keypad_setup_attempted_.insert(target);
         do_sse_emit("controller_buttons", controller_bindings_json(target));
         return;

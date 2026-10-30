@@ -159,11 +159,12 @@ function controllerBindingsCard(d) {
     programming_unused_button:'Configuring the unused button…', verifying_all_assignments:'Verifying all assignments…',
     ready:'HA button setup complete. Existing assignments were preserved.',
     existing_assignments_need_review:'Unused buttons configured. Some existing assignments need review before HA can distinguish them.',
-    model_unverified:'Automatic setup for this model still needs validation.'};
+    model_unverified:'Automatic setup for this model still needs validation.',
+    programming_unverified:'Battery keypad programming is unverified and disabled. Verified native assignments can still provide HA events.'};
   const setupMessage = setupStatus === 'not_requested' ? '' : (setupLabels[setupStatus] || `Setup stopped: ${setupStatus.replaceAll('_',' ')}.`);
   return `<div class="button-mapping"><ul>${rows}</ul>
     <div class="row"><button class="sm ghost" ${reading || setupBusy ? 'disabled' : ''} onclick="readControllerButtons(${d.avion_id})">Read button assignments</button>
-      <button class="sm" ${reading || setupBusy || d.product_type !== 127 ? 'disabled' : ''} onclick="setupControllerButtons(${d.avion_id})">Set up unused HA buttons</button></div>
+      <button class="sm" ${reading || setupBusy || !binding?.assignment_write_supported ? 'disabled' : ''} onclick="setupControllerButtons(${d.avion_id})">Set up unused HA buttons</button></div>
     <p>${esc(setupMessage)}</p>
     <p>${esc(message || 'New wired keypads are set up automatically. Setup fills unused buttons and preserves existing assignments. Battery keypad programming is awaiting validation; assignment reads require a Power/Off wake press.')}</p></div>`;
 }

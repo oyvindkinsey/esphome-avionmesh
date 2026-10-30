@@ -80,12 +80,30 @@ int main() {
     assert(binding_activation_slot(bindings.find(40004), 126, 1200, command) == 1);
     assert(binding_activation_slot(bindings.find(40004), 126, 24574, command) == 2);
     assert(!std::strcmp(binding_slot_status(bindings.find(40004), 91, 1), "model_unverified"));
+    assert(keypad_assignment_model_supported(126));
+    assert(!keypad_assignment_write_supported(126));
+    assert(keypad_assignment_write_supported(127));
+    assert(!std::strcmp(keypad_programming_status(126), "programming_unverified"));
     const uint8_t wake[] = {0x0b, 0x1c, 1, 0x0b, 5, 100, 1};
     assert(battery_keypad_wake_packet(0x73, wake, sizeof(wake), 1000, 1100));
     assert(!battery_keypad_wake_packet(0x73, wake, sizeof(wake), 1000, 2001));
     assert(!battery_keypad_wake_packet(0x73, wake, 2, 1000, 1100));
     assert(!battery_keypad_wake_packet(0, wake, sizeof(wake), 1000, 1100));
     assert(!battery_keypad_wake_packet(0x73, nullptr, 7, 1000, 1100));
+    for (unsigned i = 0; i < sizeof(wake); ++i) {
+        auto changed = std::array<uint8_t, 7>{};
+        std::copy_n(wake, 7, changed.begin());
+        changed[i] ^= 1;
+        assert(!battery_keypad_wake_packet(0x73, changed.data(), 7, 1000, 1100));
+    }
+    assert(battery_keypad_wake_packet(0x73, wake, 7, UINT32_MAX - 50, 49));
+    assert(!battery_keypad_wake_packet(0x73, wake, 7, 1101, 1100));
+    assert(bindings.set(40005, 126, ambiguous));
+    command.brightness = 255;
+    assert(binding_activation_slot(bindings.find(40005), 126, 1200, command) == 0);
+    command.brightness = 128;
+    assert(binding_activation_slot(bindings.find(40005), 126, 1200, command) == 0);
+    assert(binding_context_slot(bindings.find(40005), 126, 1200) == 0);
     bindings.remove(40101);
     assert(!bindings.find(40101));
 }

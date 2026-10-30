@@ -280,6 +280,10 @@ void MqttDiscovery::publish_controller_actions(uint16_t avion_id, uint8_t produc
             publish_(topic + "/availability", ready ? "online" : "offline", true);
             const auto mapping = esphome::json::build_json([&](JsonObject root) {
                 root["mapping_status"] = status;
+                root["assignment_read_supported"] = keypad_assignment_model_supported(product);
+                root["assignment_write_supported"] = keypad_assignment_write_supported(product);
+                root["wake_required"] = product == 126;
+                root["programming_status"] = keypad_programming_status(product);
                 if (snapshot && snapshot->valid && snapshot->product == product) {
                     root["target_id"] = binding_target(snapshot->records[slot - 1]);
                     root["native_brightness"] = snapshot->records[slot - 1][7];
