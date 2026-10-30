@@ -138,3 +138,10 @@ add_executable(test_web_response test_web_response.cpp)
 target_include_directories(test_web_response PRIVATE ${COMPONENT_DIR})
 target_compile_options(test_web_response PRIVATE -UNDEBUG)
 add_test(NAME web_response COMMAND test_web_response)
+# Compile the actual persistence implementation against isolated fake NVS APIs.
+add_executable(test_cloud_scale_nvs test_cloud_scale_nvs.cpp ${COMPONENT_DIR}/device_db.cpp)
+target_include_directories(test_cloud_scale_nvs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/scale_nvs_stubs ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${COMPONENT_DIR})
+target_compile_definitions(test_cloud_scale_nvs PRIVATE USE_ESP32 AVIONMESH_CLOUD_SCALE_TEST)
+target_compile_options(test_cloud_scale_nvs PRIVATE -UNDEBUG)
+add_test(NAME cloud_scale_nvs COMMAND test_cloud_scale_nvs)

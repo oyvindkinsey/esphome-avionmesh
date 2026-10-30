@@ -1,5 +1,9 @@
 #pragma once
 
+#if __has_include("esphome/core/defines.h")
+#include "esphome/core/defines.h"
+#endif
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -37,6 +41,13 @@ struct GroupEntry {
 
 class DeviceDB {
  public:
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    static DeviceDB cloud_scale_test_db() {
+        DeviceDB db;
+        db.cloud_scale_storage_ = true;
+        return db;
+    }
+#endif
     void load();
     bool save();
     bool replace_inventory_metadata(std::vector<DeviceEntry> devices,
@@ -70,6 +81,16 @@ class DeviceDB {
     void generate_passphrase();
 
  protected:
+    const char *storage_namespace() const {
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+        if (cloud_scale_storage_)
+            return "avion_scale";
+#endif
+        return "avionmesh";
+    }
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    bool cloud_scale_storage_{false};
+#endif
     std::vector<DeviceEntry> devices_;
     std::vector<GroupEntry> groups_;
     std::string passphrase_;

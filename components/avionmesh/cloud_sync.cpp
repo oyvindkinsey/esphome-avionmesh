@@ -7,6 +7,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <ctime>
+#include "cloud_scale_test.h"
 #include "esphome/core/log.h"
 
 namespace avionmesh {
@@ -31,7 +32,9 @@ esp_err_t receive_http(esp_http_client_event_t *event) {
             r.too_big = true;
             return ESP_FAIL;
         }
+        cloud_scale_memory("receive_before", r.body.size());
         r.body.append(static_cast<const char *>(event->data), event->data_len);
+        cloud_scale_memory("receive_after", r.body.size());
     }
     return ESP_OK;
 }
@@ -42,17 +45,27 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
         return false;
     }
     // Only fixed-host HTTPS; never follow a redirect with credentials or tokens.
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    const std::string url = std::string(AVIONMESH_CLOUD_SCALE_URL) + path;
+#else
     const std::string url = "https://api.avi-on.com/" + path;
+#endif
     Response response{{}, false, deadline};
     esp_http_client_config_t config{};
     config.url = url.c_str();
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    config.cert_pem = AVIONMESH_CLOUD_SCALE_CA;
+#else
     config.crt_bundle_attach = esp_crt_bundle_attach;
+#endif
     config.disable_auto_redirect = true;
     config.max_authorization_retries = -1;  // Token auth only; no HTTP auth negotiation.
     config.timeout_ms = 15000;
     config.event_handler = receive_http;
     config.user_data = &response;
+    cloud_scale_memory("https_before");
     auto client = esp_http_client_init(&config);
+    cloud_scale_memory("https_initialized");
     if (!client) {
         error = "https_allocation_failed";
         return false;
@@ -69,6 +82,7 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
         esp_http_client_set_post_field(client, login->data(), login->size());
     }
     auto result = esp_http_client_perform(client);
+    cloud_scale_memory("https_received", response.body.size());
     const int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
     erase_secret(authorization);
@@ -92,9 +106,12 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
         return false;
     }
     doc.clear();
+    cloud_scale_memory("parse_before", response.body.size());
     const auto parsed =
         deserializeJson(doc, response.body, DeserializationOption::NestingLimit(16));
+    cloud_scale_memory("parse_body_overlap", response.body.size());
     erase_secret(response.body);
+    cloud_scale_memory("parse_body_erased");
     if (parsed || !doc.is<JsonObject>()) {
         error = "invalid_cloud_response";
         return false;
@@ -105,6 +122,14 @@ bool fetch_cloud(const std::string &path, const std::string &token, const std::s
 
 bool CloudSync::queue(std::string email, std::string password) {
     std::lock_guard<std::mutex> lock(mutex_);
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    // No real login can ever leave a test build, including through the normal UI.
+    if (email != "scale@example.invalid" || password != "synthetic-scale-only") {
+        erase_secret(email);
+        erase_secret(password);
+        return false;
+    }
+#endif
     if (busy_) {
         erase_secret(password);
         return false;
@@ -120,6 +145,7 @@ bool CloudSync::queue(std::string email, std::string password) {
 void CloudSync::progress(const char *state) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_ = state;
+    cloud_scale_memory(state);
 }
 void CloudSync::finish(const std::string &error) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -139,6 +165,15 @@ std::string CloudSync::status_json() {
     doc["error"] = error_;
     doc["added_devices"] = added_devices_;
     doc["added_groups"] = added_groups_;
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    doc["experimental_synthetic"] = true;
+#ifdef AVIONMESH_CLOUD_SCALE_PERSIST
+    doc["dry_run"] = false;
+    doc["storage_namespace"] = "avion_scale";
+#else
+    doc["dry_run"] = true;
+#endif
+#endif
     std::string json;
     serializeJson(doc, json);
     return json;
@@ -148,6 +183,8 @@ void CloudSync::task_entry(void *arg) {
     vTaskDelete(nullptr);
 }
 void CloudSync::worker() {
+    CloudScaleSampler sampler;
+    cloud_scale_memory("worker_start");
     std::string email, password, key;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -235,6 +272,7 @@ void CloudSync::worker() {
                          deadline) &&
              cloud_parse_devices(doc.as<JsonVariantConst>(), inventory, error);
     }
+    cloud_scale_memory("devices_accumulated");
     std::vector<std::string> groups;
     if (ok) {
         progress("reading_groups");
@@ -261,7 +299,9 @@ void CloudSync::worker() {
             break;
         ok = fetch_cloud("groups/" + pid, token, nullptr, doc, error, deadline) &&
              cloud_parse_group(doc.as<JsonVariantConst>(), inventory, error);
+        cloud_scale_memory("group_accumulated");
     }
+    cloud_scale_memory("inventory_accumulated");
     erase_secret(token);
     doc.clear();
     {
@@ -279,7 +319,11 @@ bool CloudSync::loop(DeviceDB &db) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (queued_) {
             queued_ = false;
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+            expected_key_ = "AQEBAQEBAQEBAQEBAQEBAQ==";
+#else
             expected_key_ = db.passphrase();
+#endif
             launch = true;
         }
         if (worker_done_) {
@@ -287,30 +331,57 @@ bool CloudSync::loop(DeviceDB &db) {
             done = true;
             error = error_;
             inventory = std::move(inventory_);
+#ifndef AVIONMESH_CLOUD_SCALE_TEST
             if (error.empty() && expected_key_ != db.passphrase())
                 error = "mesh_changed_during_sync";
+#endif
         }
     }
     if (launch) {
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+        if (false)  // Test key is fixed; the home key is never used or transmitted.
+#else
         if (db.passphrase().empty())
+#endif
             finish("mesh_key_required");
         else if (xTaskCreate(task_entry, "avion_cloud", 12288, this, 1, nullptr) != pdPASS)
             finish("sync_task_allocation_failed");
     }
     if (!done)
         return false;
+    cloud_scale_memory("merge_validate_before");
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+#ifdef AVIONMESH_CLOUD_SCALE_PERSIST
+    if (!scale_loaded_) {
+        scale_db_.load();
+        scale_loaded_ = true;
+    }
+    const auto &current_devices = scale_db_.devices();
+    const auto &current_groups = scale_db_.groups();
+#else
+    const auto &current_devices = scale_devices_;
+    const auto &current_groups = scale_groups_;
+#endif
+#else
+    const auto &current_devices = db.devices();
+    const auto &current_groups = db.groups();
+#endif
     if (error.empty())
-        cloud_validate_merge(inventory, db.devices(), db.groups(), error);
+        cloud_validate_merge(inventory, current_devices, current_groups, error);
+    cloud_scale_memory("merge_validate_after");
     if (!error.empty()) {
         finish(error);
         return false;
     }
     progress("saving");
     unsigned added_devices = 0, added_groups = 0;
-    auto devices = db.devices();
-    auto groups = db.groups();
+    cloud_scale_memory("merge_copy_before");
+    auto devices = current_devices;
+    auto groups = current_groups;
+    cloud_scale_memory("merge_copy_after");
     for (const auto &d : inventory.devices) {
-        if (!db.find_device(d.id)) {
+        if (std::none_of(current_devices.begin(), current_devices.end(),
+                         [&](const DeviceEntry &old) { return old.avion_id == d.id; })) {
             devices.push_back({d.id,
                                d.product,
                                d.name,
@@ -340,17 +411,42 @@ bool CloudSync::loop(DeviceDB &db) {
                     d.groups.push_back(g.id);
         }
     }
+    cloud_scale_memory("merge_complete");
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    // This provider is deliberately incapable of mutating the passed home DB.
+#ifdef AVIONMESH_CLOUD_SCALE_PERSIST
+    cloud_scale_memory("save_test_namespace_before");
+    if (!scale_db_.replace_inventory_metadata(std::move(devices), std::move(groups))) {
+        cloud_scale_memory("save_test_namespace_failed");
+        finish("inventory_save_failed");
+        return false;
+    }
+    cloud_scale_memory("save_test_namespace_after");
+#else
+    scale_devices_ = std::move(devices);
+    scale_groups_ = std::move(groups);
+    cloud_scale_memory("save_skipped_dry_run");
+#endif
+#else
+    cloud_scale_memory("save_before");
     if (!db.replace_inventory_metadata(std::move(devices), std::move(groups))) {
         finish("inventory_save_failed");
         return false;
     }
+    cloud_scale_memory("save_after");
+#endif
     {
         std::lock_guard<std::mutex> lock(mutex_);
         added_devices_ = added_devices;
         added_groups_ = added_groups;
     }
     finish("");
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    // Suppress hub cache invalidation, MQTT discovery and other real-inventory work.
+    return false;
+#else
     return true;
+#endif
 }
 }  // namespace avionmesh
 #endif

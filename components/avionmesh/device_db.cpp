@@ -14,7 +14,6 @@
 namespace avionmesh {
 
 #ifdef USE_ESP32
-static const char *NVS_NAMESPACE = "avionmesh";
 static const char *NVS_KEY_DEVICES = "devices";
 static const char *NVS_KEY_GROUPS = "groups";
 static const char *NVS_KEY_PASSPHRASE = "passphrase";
@@ -30,7 +29,7 @@ static const char *NVS_KEY_PASSPHRASE = "passphrase";
 void DeviceDB::load() {
 #ifdef USE_ESP32
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK)
+    if (nvs_open(storage_namespace(), NVS_READONLY, &handle) != ESP_OK)
         return;
 
     /* Load passphrase */
@@ -116,7 +115,7 @@ bool DeviceDB::save() {
         return true;  // Queued in-memory; end_batch() performs the single commit.
 #ifdef USE_ESP32
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)
+    if (nvs_open(storage_namespace(), NVS_READWRITE, &handle) != ESP_OK)
         return false;
 
     /* Save passphrase */
@@ -181,6 +180,9 @@ bool DeviceDB::save() {
 bool DeviceDB::replace_inventory_metadata(std::vector<DeviceEntry> devices,
                                           std::vector<GroupEntry> groups) {
     DeviceDB candidate;
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    candidate.cloud_scale_storage_ = cloud_scale_storage_;
+#endif
     candidate.passphrase_ = passphrase_;
     candidate.devices_ = std::move(devices);
     candidate.groups_ = std::move(groups);
@@ -321,7 +323,7 @@ bool DeviceDB::remove_device_from_group(uint16_t avion_id, uint16_t group_id) {
 void DeviceDB::clear() {
 #ifdef USE_ESP32
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)
+    if (nvs_open(storage_namespace(), NVS_READWRITE, &handle) != ESP_OK)
         return;
 
     nvs_erase_key(handle, NVS_KEY_DEVICES);

@@ -8,6 +8,9 @@ import base64
 import binascii
 import gzip
 import os
+import json
+from urllib.parse import urlsplit
+from esphome.core import CORE
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
@@ -20,6 +23,27 @@ AUTO_LOAD = ["json", "esp32_ble", "web_server_base"]
 
 CONF_PASSPHRASE = "passphrase"
 CONF_SINGLE_DEVICE = "single_device"
+CONF_CLOUD_SCALE = "experimental_cloud_scale"
+
+
+def validate_scale_url(value):
+    parsed = urlsplit(cv.string_strict(value))
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise cv.Invalid("invalid test HTTPS port") from error
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+            or any(c.isspace() for c in value) or (port is not None and port == 0)):
+        raise cv.Invalid("experimental cloud scale requires an HTTPS origin without credentials/path/query")
+    return value.rstrip("/") + "/"
+
+
+CLOUD_SCALE_SCHEMA = cv.Schema({
+    cv.Required("url"): validate_scale_url,
+    cv.Required("ca_certificate"): cv.file_,
+    cv.Optional("persist", default=False): cv.boolean,
+})
 
 
 def validate_passphrase(value):
@@ -64,11 +88,23 @@ CONFIG_SCHEMA = cv.Schema(
         cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
         cv.Optional(CONF_PASSPHRASE): validate_passphrase,
         cv.Optional(CONF_SINGLE_DEVICE, default=False): cv.boolean,
+        cv.Optional(CONF_CLOUD_SCALE): CLOUD_SCALE_SCHEMA,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
 
 async def to_code(config):
+    if CONF_CLOUD_SCALE in config:
+        scale = config[CONF_CLOUD_SCALE]
+        with open(CORE.relative_config_path(scale["ca_certificate"]), encoding="ascii") as handle:
+            certificate = handle.read()
+        if "-----BEGIN CERTIFICATE-----" not in certificate or "PRIVATE KEY" in certificate:
+            raise cv.Invalid("ca_certificate must contain only the public test certificate")
+        cg.add_define("AVIONMESH_CLOUD_SCALE_TEST")
+        if scale["persist"]:
+            cg.add_define("AVIONMESH_CLOUD_SCALE_PERSIST")
+        cg.add_define("AVIONMESH_CLOUD_SCALE_URL", cg.RawExpression(json.dumps(scale["url"])))
+        cg.add_define("AVIONMESH_CLOUD_SCALE_CA", cg.RawExpression(json.dumps(certificate)))
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
