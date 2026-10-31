@@ -285,12 +285,6 @@ void AvionMeshWebHandler::send_json(AsyncWebServerRequest *request, int code,
     auto *response = begin_json_response(request, code, json, [request](const char *status) {
         httpd_resp_set_status(*request, status);
     });
-    // ESPHome's wrapper maps unlisted status codes to 500. Set these new
-    // endpoint statuses explicitly after it initializes the response.
-    if (code == 202)
-        httpd_resp_set_status(*request, "202 Accepted");
-    if (code == 403)
-        httpd_resp_set_status(*request, "403 Forbidden");
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
 }
