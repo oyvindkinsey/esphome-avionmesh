@@ -1,4 +1,5 @@
 #include "mqtt_discovery.h"
+#include "esphome/components/json/json_util.h"
 
 #ifdef USE_ESP32
 #include "esphome/components/mqtt/mqtt_client.h"
@@ -134,6 +135,166 @@ void MqttDiscovery::publish_light(uint16_t avion_id, const std::string &name, bo
 
 void MqttDiscovery::remove_light(uint16_t avion_id) {
     publish_(discovery_topic(avion_id), "", true);
+}
+
+std::string MqttDiscovery::controller_event_topic(uint16_t avion_id) const {
+    return topic_prefix_ + "/controller/" + std::to_string(avion_id) + "/event";
+}
+
+std::string MqttDiscovery::controller_discovery_topic(uint16_t avion_id) const {
+    return "homeassistant/event/" + node_name_ + "_" + std::to_string(avion_id) + "/config";
+}
+
+std::string MqttDiscovery::controller_availability_topic() const {
+    return topic_prefix_ + "/controller/availability";
+}
+
+void MqttDiscovery::publish_controller(uint16_t avion_id, const std::string &name,
+                                       const std::string &model) {
+    auto identity = node_name_ + "_" + std::to_string(avion_id);
+    auto config = esphome::json::build_json([&](JsonObject root) {
+        root["name"] = "Commands";
+        root["unique_id"] = identity + "_commands";
+        root["state_topic"] = controller_event_topic(avion_id);
+        root["device_class"] = "button";
+        root["icon"] = "mdi:gesture-tap-button";
+        auto types = root["event_types"].to<JsonArray>();
+        for (const char *type : {"on", "off", "brightness", "raise", "lower", "mesh_command"})
+            types.add(type);
+        root["availability_mode"] = "all";
+        auto availability = root["availability"].to<JsonArray>();
+        availability.add<JsonObject>()["topic"] = topic_prefix_ + "/status";
+        availability.add<JsonObject>()["topic"] = controller_availability_topic();
+        auto device = root["device"].to<JsonObject>();
+        device["identifiers"].to<JsonArray>().add(identity);
+        device["name"] = name;
+        device["manufacturer"] = "Avi-on / HALO Home";
+        device["model"] = model;
+        device["via_device"] = node_name_;
+    });
+    publish_(controller_discovery_topic(avion_id), config, true);
+}
+
+void MqttDiscovery::remove_controller(uint16_t avion_id) {
+    publish_(controller_discovery_topic(avion_id), "", true);
+    publish_(controller_input_availability_topic(avion_id), "", true);
+    const auto identity = node_name_ + "_" + std::to_string(avion_id);
+    for (const char *action : {"button_1", "button_2", "button_3", "button_4", "raise", "lower",
+                               "on", "off", "brightness"}) {
+        publish_("homeassistant/event/" + identity + "_" + action + "/config", "", true);
+        publish_("homeassistant/device_automation/" + identity + "_" + action + "/config", "",
+                 true);
+        if (std::string(action).rfind("button_", 0) == 0) {
+            const auto topic = controller_action_topic(avion_id, action);
+            publish_(topic + "/availability", "", true);
+            publish_(topic + "/mapping", "", true);
+        }
+    }
+}
+
+std::string MqttDiscovery::controller_action_topic(uint16_t avion_id,
+                                                   const std::string &action) const {
+    return topic_prefix_ + "/controller/" + std::to_string(avion_id) + "/action/" + action;
+}
+
+std::string MqttDiscovery::controller_input_availability_topic(uint16_t avion_id) const {
+    return topic_prefix_ + "/controller/" + std::to_string(avion_id) + "/input/availability";
+}
+
+void MqttDiscovery::publish_controller_actions(uint16_t avion_id, uint8_t product,
+                                               const std::string &name,
+                                               const ControllerBindingSnapshot *snapshot,
+                                               bool local_level) {
+    const auto identity = node_name_ + "_" + std::to_string(avion_id);
+    for (unsigned i = 0; i < 9; ++i) {
+        const bool button = i < 4;
+        const bool brightness = i == 8;
+        if (button && product != 127 && product != 126)
+            continue;
+        if (brightness && product != 81 && !(product == 91 && local_level)) {
+            // Remove this optional entity/trigger when an accessory switches
+            // back to native commands. Other controller layouts stay unchanged.
+            if (product == 91) {
+                publish_("homeassistant/event/" + identity + "_brightness/config", "", true);
+                publish_("homeassistant/device_automation/" + identity + "_brightness/config", "",
+                         true);
+            }
+            continue;
+        }
+        const uint8_t slot = i + 1;
+        const std::string key = brightness ? "brightness"
+                                : button   ? "button_" + std::to_string(slot)
+                                           : (i == 4   ? "raise"
+                                              : i == 5 ? "lower"
+                                              : i == 6 ? "on"
+                                                       : "off");
+        const std::string label = brightness ? "Brightness"
+                                  : button   ? "Button " + std::to_string(slot)
+                                             : (i == 4   ? "Raise"
+                                                : i == 5 ? "Lower"
+                                                : i == 6 ? "On"
+                                                         : "Off");
+        const auto topic = controller_action_topic(avion_id, key);
+        const char *event_type = button ? "activated" : "command";
+        const auto status = button ? binding_slot_status(snapshot, product, slot) : "ready";
+        const bool ready = std::string(status) == "ready";
+        auto device_info = [&](JsonObject device) {
+            device["identifiers"].to<JsonArray>().add(identity);
+            device["name"] = name;
+            device["manufacturer"] = "Avi-on / HALO Home";
+            device["model"] = controller_name(product);
+            device["via_device"] = node_name_;
+        };
+        auto event_config = esphome::json::build_json([&](JsonObject root) {
+            root["name"] = label;
+            root["unique_id"] = identity + "_" + key;
+            root["state_topic"] = topic;
+            if (brightness)
+                root["icon"] = "mdi:tune-vertical";
+            else
+                root["device_class"] = "button";
+            root["event_types"].to<JsonArray>().add(event_type);
+            root["availability_mode"] = "all";
+            auto availability = root["availability"].to<JsonArray>();
+            availability.add<JsonObject>()["topic"] = topic_prefix_ + "/status";
+            availability.add<JsonObject>()["topic"] = controller_availability_topic();
+            if (product == 91 && local_level)
+                availability.add<JsonObject>()["topic"] =
+                    controller_input_availability_topic(avion_id);
+            if (button) {
+                availability.add<JsonObject>()["topic"] = topic + "/availability";
+                root["json_attributes_topic"] = topic + "/mapping";
+            }
+            device_info(root["device"].to<JsonObject>());
+        });
+        publish_("homeassistant/event/" + identity + "_" + key + "/config", event_config, true);
+        const auto trigger_topic =
+            "homeassistant/device_automation/" + identity + "_" + key + "/config";
+        if (ready) {
+            auto trigger_config = esphome::json::build_json([&](JsonObject root) {
+                root["automation_type"] = "trigger";
+                root["type"] = button ? "activated" : "command";
+                root["subtype"] = label;
+                root["topic"] = topic;
+                root["value_template"] = "{{ value_json.event_type }}";
+                root["payload"] = event_type;
+                device_info(root["device"].to<JsonObject>());
+            });
+            publish_(trigger_topic, trigger_config, true);
+        } else
+            publish_(trigger_topic, "", true);
+        if (button) {
+            publish_(topic + "/availability", ready ? "online" : "offline", true);
+            const auto mapping = esphome::json::build_json([&](JsonObject root) {
+                root["mapping_status"] = status;
+                if (snapshot && snapshot->valid && snapshot->product == product) {
+                    root["target_id"] = binding_target(snapshot->records[slot - 1]);
+                    root["native_brightness"] = snapshot->records[slot - 1][7];
+                }
+            });
+            publish_(topic + "/mapping", mapping, true);
+        }
+    }
 }
 
 void MqttDiscovery::publish_on_off_state(uint16_t avion_id, bool on) {

@@ -80,3 +80,12 @@ target_link_libraries(avionmesh_tests PRIVATE GTest::gtest_main ${ARDUINOJSON_TA
 
 include(GoogleTest)
 gtest_discover_tests(avionmesh_tests)
+
+# Protocol fixtures use standalone assertion executables; keep assertions enabled.
+foreach(profile_test IN ITEMS controller_events absolute_dimmer local_dimmer mesh_capture controller_discovery controller_tables controller_bindings)
+    add_executable(test_${profile_test} test_${profile_test}.cpp ${COMPONENT_DIR}/controller_bindings.cpp ${COMPONENT_DIR}/mqtt_discovery.cpp stubs/stubs.cpp)
+    target_include_directories(test_${profile_test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${COMPONENT_DIR})
+    target_compile_options(test_${profile_test} PRIVATE -UNDEBUG)
+    target_link_libraries(test_${profile_test} PRIVATE ${ARDUINOJSON_TARGET})
+    add_test(NAME ${profile_test} COMMAND test_${profile_test})
+endforeach()
