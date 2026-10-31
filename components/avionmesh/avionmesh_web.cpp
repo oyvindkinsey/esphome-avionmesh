@@ -1,4 +1,5 @@
 #include "avionmesh_web.h"
+#include "web_response.h"
 #include "avionmesh_hub.h"
 #include "sse_initial_sync.h"
 #include "json_string.h"
@@ -277,7 +278,9 @@ std::string AvionMeshWebHandler::read_body(AsyncWebServerRequest *request) {
 
 void AvionMeshWebHandler::send_json(AsyncWebServerRequest *request, int code,
                                     const std::string &json) {
-    auto *response = request->beginResponse(code, "application/json", json);
+    auto *response = begin_json_response(request, code, json, [request](const char *status) {
+        httpd_resp_set_status(*request, status);
+    });
     // ESPHome's wrapper maps unlisted status codes to 500. Set these new
     // endpoint statuses explicitly after it initializes the response.
     if (code == 202)

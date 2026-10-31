@@ -131,3 +131,9 @@ target_compile_options(test_sse_sessions PRIVATE -UNDEBUG)
 target_link_libraries(test_sse_sessions PRIVATE ${ARDUINOJSON_TARGET} Threads::Threads)
 add_test(NAME sse_sessions COMMAND test_sse_sessions)
 
+
+# Exercise the production response adapter against the wrapper's unknown-code fallback.
+add_executable(test_web_response test_web_response.cpp)
+target_include_directories(test_web_response PRIVATE ${COMPONENT_DIR})
+target_compile_options(test_web_response PRIVATE -UNDEBUG)
+add_test(NAME web_response COMMAND test_web_response)
