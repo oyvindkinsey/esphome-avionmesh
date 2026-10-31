@@ -5,6 +5,10 @@
 #include <functional>
 #include <span>
 
+#ifdef AVIONMESH_TEST_RX_OBSERVER
+#define RECSRMESH_RX_OBSERVER_API 1
+#endif
+
 namespace csrmesh {
 
 enum class Error {
@@ -40,6 +44,7 @@ using BleWriteFn = std::function<int(Characteristic, const uint8_t *, size_t, bo
 using RxCallback = std::function<void(const uint8_t *, size_t)>;
 struct Context {
     BleWriteFn ble_write;
+    RxCallback rx_cb = [](const uint8_t *, size_t) {};
 };
 inline void init(Context &, BleWriteFn, RxCallback) {}
 inline void feed(Context &, Characteristic, const uint8_t *, size_t, uint32_t) {}
@@ -84,6 +89,18 @@ inline const char *state_name(State) {
 inline void cleanup(Context &) {}
 }  // namespace protocol
 
+#ifdef AVIONMESH_TEST_RX_OBSERVER
+struct RxMessage {
+    uint16_t mcp_source, crypto_source;
+    uint32_t sequence;
+    uint8_t opcode;
+    const uint8_t *payload;
+    size_t payload_len;
+    uint32_t received_ms;
+};
+using RxObserver = std::function<void(const RxMessage &)>;
+#endif
+
 // --- MeshContext ---
 struct MeshContext {
     mtl::Context mtl;
@@ -91,6 +108,9 @@ struct MeshContext {
     uint8_t mcp_key[KEY_LEN] = {};
     uint8_t masp_key[KEY_LEN] = {};
     RxCallback rx_cb;
+#ifdef AVIONMESH_TEST_RX_OBSERVER
+    RxObserver rx_observer;
+#endif
     bool discovering = false;
     DiscoveryCallback discovery_cb;
     protocol::Context *proto = nullptr;
@@ -103,6 +123,11 @@ inline Error init(MeshContext &, mtl::BleWriteFn, const char *) {
 inline void set_rx_callback(MeshContext &ctx, RxCallback cb) {
     ctx.rx_cb = std::move(cb);
 }
+#ifdef AVIONMESH_TEST_RX_OBSERVER
+inline void set_rx_observer(MeshContext &ctx, RxObserver observer) {
+    ctx.rx_observer = std::move(observer);
+}
+#endif
 inline void feed_notify(MeshContext &, Characteristic, const uint8_t *, size_t, uint32_t) {}
 inline void poll(MeshContext &, uint32_t) {}
 inline Error send(MeshContext &, uint16_t, uint8_t, const uint8_t *, size_t) {

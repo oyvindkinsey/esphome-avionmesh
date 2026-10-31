@@ -76,6 +76,9 @@ async def to_code(config):
     cg.add_define("USE_ESP32_BLE_CLIENT")
     add_idf_sdkconfig_option("CONFIG_BT_GATTC_ENABLE", True)
     add_idf_sdkconfig_option("CONFIG_BT_GATTS_ENABLE", True)
+    # SSE drains/close requests run on HTTPD's task. A full work mailbox must
+    # fail promptly for retry rather than block that same task waiting on itself.
+    add_idf_sdkconfig_option("CONFIG_HTTPD_QUEUE_WORK_BLOCKING", False)
 
     # Passphrase is now optional - stored in NVS instead of config
     if CONF_PASSPHRASE in config:

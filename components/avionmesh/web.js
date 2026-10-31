@@ -4,12 +4,17 @@ let meshMqttExposed = false;
 let unassocHashes = [];
 let claimingHash = null;
 let evtSource = null;
+const controllerEvents = new Map();
+const controllerBindings = new Map();
+const isController = d => d.is_controller || [91, 81, 127, 126].includes(d.product_type);
 
 const BLE_NAMES = ['Idle', 'Scanning', 'Connecting', 'Discovering', 'Ready', 'Disconnected'];
 const PRODUCTS = [
   {v:0,n:'Group'}, {v:90,n:'Lamp Dimmer'}, {v:93,n:'Recessed DL'},
   {v:94,n:'Light Adapter'}, {v:97,n:'Smart Dimmer'}, {v:134,n:'Smart Bulb'},
-  {v:137,n:'Surface DL'}, {v:162,n:'Micro Edge'}, {v:167,n:'Smart Switch'}
+  {v:137,n:'Surface DL'}, {v:162,n:'Micro Edge'}, {v:167,n:'Smart Switch'},
+  {v:81,n:'Anywhere Dimmer'}, {v:91,n:'Accessory Dimmer'},
+  {v:126,n:'Battery Scene Keypad'}, {v:127,n:'Wired Scene Keypad'}
 ];
 
 // CSR product id (from ping replies) → Avi-on product type, learned from
@@ -84,11 +89,101 @@ function updateStatusBar() {
 /* ── Device cards ────────────────────────── */
 function renderDevices() {
   const grid = $('deviceGrid');
-  if (!devices.length) {
-    grid.innerHTML = '<p class="empty">No devices added yet</p>';
-    return;
-  }
-  grid.innerHTML = devices.map(d => deviceCard(d)).join('');
+  const lights = devices.filter(d => !isController(d));
+  const controllers = devices.filter(isController);
+  grid.innerHTML = lights.length ? lights.map(deviceCard).join('') : '<p class="empty">No lights added yet</p>';
+  $('controllerGrid').innerHTML = controllers.length ? controllers.map(controllerCard).join('') :
+    '<p class="empty">No controllers added yet</p>';
+}
+
+function controllerCard(d) {
+  const last = controllerEvents.get(d.avion_id);
+  const inputLabels = {disabled:'HA events disabled', waiting_for_baseline:'Reading starting level…',
+    ready_local_reports:'Ready · local controller reports', native_commands:'Native command decoder selected'};
+  const model = {91: 'Accessory Dimmer', 81: 'Anywhere Dimmer', 127: 'Wired Scene Keypad', 126: 'Battery Scene Keypad'}[d.product_type];
+  return `<div class="card" data-controller="${d.avion_id}">
+    <div class="card-name">${esc(d.name)} <a href="#" class="rename-link" onclick="renameDev(${d.avion_id});return false" title="Rename">✎</a></div>
+    <div class="card-sub">${esc(model)} · #${d.avion_id}</div>
+    ${[81,91].includes(d.product_type) ? `<p style="font-size:.82em;color:var(--accent2)">${esc(inputLabels[d.ha_input_status] || 'Checking HA input…')}</p>` : ''}
+    <label class="toggle-row" style="margin-top:12px">
+      <span class="toggle">
+        <input type="checkbox" ${d.mqtt_exposed ? 'checked' : ''} onchange="toggleMqtt(${d.avion_id},this.checked,this)">
+        <span class="knob"></span>
+      </span>
+      HA command events
+    </label>
+    <p style="font-size:.82em;color:var(--dim)">${[81,91].includes(d.product_type) ? 'HA exposes Brightness, On, Off, Raise and Lower from observed levels and commands. Native assignment state is unknown; assignment programming is not supported for this model.' : 'HA exposes named On, Off, Raise and Lower command events. Button events require verified assignment reads.'}</p>
+    ${d.product_type === 91 ? `<label class="toggle-row"><span class="toggle"><input type="checkbox" ${d.ha_local_level ? 'checked' : ''} onchange="setLocalDimmerMode(${d.avion_id},this.checked,this)"><span class="knob"></span></span>Local level reports</label>
+      <p style="font-size:.82em;color:var(--dim)">${d.ha_local_level ? 'Use Brightness to follow local reports from a separately confirmed unassigned dimmer. The first report after reconnect and query replies are silent. Repeated On/Off reports are preserved; Raise/Lower follow level changes. These are not press/release gestures.' : 'Raise/Lower follow changes in native brightness commands. Holding a button can produce repeated events.'} This selects an event decoder only; it does not read, clear or change HALO assignments or prove HA-only operation.</p>` : ''}
+    ${d.product_type === 81 ? '<p style="font-size:.82em;color:var(--dim)">Use the HA Brightness event to follow the touch slider’s level. Raise/Lower follow sliding direction; On/Off are the full-brightness and zero-level commands. Unassigned setup needs a spare-device capture; enabling HA events preserves existing native targets, including managed empty targets.</p>' : ''}
+    ${controllerBindingsCard(d)}
+    <p style="font-size:.82em">${last ? `Last ${last.input_source === 'local_level_report' ? 'input report' : 'command'}: ${esc(last.event_type)}${last.input_source === 'local_level_report' ? ' · local level' : last.target_id != null ? ` · ${esc(last.target_kind)} #${last.target_id}` : ''}` : 'No command observed in this browser session.'}</p>
+    <div class="card-actions">
+      <button class="sm ghost" id="exBtn${d.avion_id}" onclick="examDev(${d.avion_id})">Examine</button>
+      <button class="sm danger" onclick="removeDev(${d.avion_id})">Remove</button>
+    </div>
+    <div id="exRes${d.avion_id}" style="font-size:.76em;color:var(--accent2)"></div>
+  </div>`;
+}
+
+function controllerBindingsCard(d) {
+  if (![127,126].includes(d.product_type)) return '';
+  const binding = controllerBindings.get(d.avion_id);
+  const labels = {ready:'Ready', unassigned:'Unassigned', needs_refresh:'Read assignments to enable',
+    model_unverified:'Model not validated yet', unsupported_binding:'Unsupported assignment',
+    ambiguous_target:'Shared target — button ambiguous'};
+  const rows = [1,2,3,4].map(slot => {
+    const item = binding?.slots?.find(s => s.slot === slot);
+    const status = item?.status || 'needs_refresh';
+    let target = '';
+    if (status === 'ready') {
+      const group = groups.find(g => g.group_id === item.target_id);
+      const device = devices.find(v => v.avion_id === item.target_id);
+      target = ` · ${group?.name?.startsWith('HA event target: ') ? 'HA automation target' : esc(group?.name || device?.name || '#' + item.target_id)}`;
+    }
+    return `<li><strong>Button ${slot}</strong>: ${esc(labels[status] || status)}${target}</li>`;
+  }).join('');
+  const reading = binding?.busy;
+  const setupBusy = binding?.setup_busy;
+  const setupStatus = binding?.setup_status || (d.ha_setup_pending ? 'pending' : 'not_requested');
+  const outcome = binding?.status;
+  let message = '';
+  if (reading && outcome === 'waiting_for_wake') message = `Waiting for battery wake for round ${binding.round}/2${binding.wake_reason === 'read_timeout_restart_round' ? ' (previous partial round timed out and was discarded)' : ''}. Close the HALO app; use the keypad’s bottom Power/Off button to continue the requested read.`;
+  else if (reading) message = `Reading assignments: round ${binding.round}/2, ${binding.query_slot ? 'button ' + binding.query_slot : 'count'}…`;
+  else if (outcome === 'saved') message = 'Mapping verified twice and saved. Native assignments were not changed.';
+  else if (outcome && !['needs_refresh','model_unverified'].includes(outcome)) message = `Read status: ${outcome.replaceAll('_',' ')}.`;
+  const setupLabels = {pending:'Automatic HA setup is pending.',
+    waiting_for_wake:'Close the HALO app, then press the battery keypad’s bottom Power/Off button once to begin setup.',
+    reading_assignments:'Reading existing assignments…',
+    planning_targets:'Reserving empty HA targets…', checking_unused_button:'Checking the unused button…',
+    programming_unused_button:'Configuring the unused button…', verifying_all_assignments:'Verifying all assignments…',
+    ready:'HA button setup complete. Existing assignments were preserved.',
+    existing_assignments_need_review:'Unused buttons configured. Some existing assignments need review before HA can distinguish them.',
+    model_unverified:'Automatic setup for this model still needs validation.',
+    programming_unverified:'Battery keypad programming is unverified and disabled. Verified native assignments can still provide HA events.'};
+  const setupMessage = setupStatus === 'not_requested' ? '' : (setupLabels[setupStatus] || `Setup stopped: ${setupStatus.replaceAll('_',' ')}.`);
+  return `<div class="button-mapping"><ul>${rows}</ul>
+    <div class="row"><button class="sm ghost" ${reading || setupBusy ? 'disabled' : ''} onclick="readControllerButtons(${d.avion_id})">Read button assignments</button>
+      <button class="sm" ${reading || setupBusy || !binding?.assignment_write_supported ? 'disabled' : ''} onclick="setupControllerButtons(${d.avion_id})">Set up unused HA buttons</button></div>
+    <p>${esc(setupMessage)}</p>
+    <p>${esc(message || 'New wired keypads are set up automatically. Setup fills unused buttons and preserves existing assignments. Battery keypad programming is awaiting validation; assignment reads require a Power/Off wake press.')}</p></div>`;
+}
+
+async function readControllerButtons(id) {
+  try { await postJson('controller_buttons/read', {controller_id:id}); }
+  catch (error) { feedLog(`Read buttons: ${error.message}`); }
+}
+
+async function setLocalDimmerMode(id, enabled, input) {
+  input.disabled = true;
+  try { await postJson('controller_input_mode', {avion_id:id, enabled}); }
+  catch (error) { input.checked = !enabled; feedLog(`Dimmer input: ${error.message}`); }
+  finally { input.disabled = false; }
+}
+
+async function setupControllerButtons(id) {
+  try { await postJson('controller_buttons/setup', {controller_id:id}); }
+  catch (error) { feedLog(`Set up buttons: ${error.message}`); }
 }
 
 function deviceCard(d) {
@@ -157,6 +252,8 @@ function deviceCard(d) {
 }
 
 function applyDeviceState(d) {
+  const device = devices.find(x => x.avion_id === d.avion_id);
+  if (device && isController(device)) return;
   const on = d.brightness > 0;
   const pill = $('stPill' + d.avion_id);
   if (pill) {
@@ -187,6 +284,19 @@ function renderGroups() {
 }
 
 function groupCard(g) {
+  if (g.ha_event_target) {
+    return `<div class="card"><div class="card-name">${esc(g.name)}</div>
+      <div class="card-sub">HA-only event target #${g.group_id}</div>
+      <p>Reserved for controller events. This target has no light members; the bridge keeps this target empty.</p></div>`;
+  }
+  if (g.name.startsWith('HA event target: ')) {
+    const owner = g.name.slice('HA event target: '.length).split(':');
+    return `<div class="card">
+      <div class="card-name">HA-only button ${esc(owner[1])}</div>
+      <div class="card-sub">Keypad #${esc(owner[0])} · event target #${g.group_id}</div>
+      <p style="font-size:.82em;color:var(--dim)">Reserved for controller events. This target has no light members.</p>
+    </div>`;
+  }
   const isAll = g.group_id === 0;
 
   const memberTags = g.members.map(mid => {
@@ -299,6 +409,34 @@ function connectSSE() {
     renderGroups();
   });
 
+  evtSource.addEventListener('controller_event', e => {
+    const command = JSON.parse(e.data);
+    controllerEvents.set(command.source_id, command);
+    renderDevices();
+    feedLog(`Controller #${command.source_id}: ${command.event_type}`);
+  });
+  evtSource.addEventListener('controller_input_mode', e => {
+    const result = JSON.parse(e.data);
+    const device = devices.find(d => d.avion_id === result.avion_id);
+    if (device && result.saved) {
+      device.ha_local_level = result.enabled;
+      device.ha_input_status = result.ha_input_status;
+    }
+    renderDevices();
+    feedLog(result.saved ? `Dimmer #${result.avion_id}: input mode saved` : `Dimmer input: ${result.message}`);
+  });
+  evtSource.addEventListener('controller_input_status', e => {
+    const result = JSON.parse(e.data);
+    const device = devices.find(d => d.avion_id === result.controller_id);
+    if (device) device.ha_input_status = result.status;
+    renderDevices();
+  });
+  evtSource.addEventListener('controller_buttons', e => {
+    const binding = JSON.parse(e.data);
+    controllerBindings.set(binding.controller_id, binding);
+    renderDevices();
+  });
+
   evtSource.addEventListener('device_added', e => {
     const d = JSON.parse(e.data);
     const i = devices.findIndex(x => x.avion_id === d.avion_id);
@@ -384,6 +522,11 @@ function connectSSE() {
         unassocHashes.splice(idx, 1);
       }
       claimingHash = null;
+    } else if (d.status === 'error' && claimingHash) {
+      const idx = unassocHashes.indexOf(claimingHash);
+      const msg = $('claimMsg' + idx);
+      if (msg) msg.textContent = 'Failed: ' + (d.message || 'association failed') + '. Re-scan before retrying.';
+      claimingHash = null;
     }
   });
 
@@ -420,11 +563,13 @@ function connectSSE() {
     renderGroups();
   });
 
-  evtSource.addEventListener('save_result', () => {
+  evtSource.addEventListener('save_result', e => {
+    const result = JSON.parse(e.data);
     $('btnSave').disabled = false;
-    $('saveMsg').textContent = 'Saved';
+    $('saveMsg').textContent = result.status === 'ok' ? 'Saved' : 'Save failed';
+    $('saveMsg').style.color = result.status === 'ok' ? 'var(--ok)' : 'var(--err)';
     setTimeout(() => $('saveMsg').textContent = '', 3000);
-    feedLog('DB saved');
+    feedLog(result.status === 'ok' ? 'DB saved' : 'DB save failed');
   });
 
   evtSource.addEventListener('mqtt_toggled', e => {
@@ -434,11 +579,20 @@ function connectSSE() {
       renderGroups();
     } else {
       const dev = devices.find(x => x.avion_id === d.id);
-      if (dev) { dev.mqtt_exposed = d.mqtt_exposed; renderDevices(); }
+      if (dev) {
+        dev.mqtt_exposed = d.mqtt_exposed;
+        if (d.ha_input_status !== undefined) dev.ha_input_status = d.ha_input_status;
+        if (d.ha_setup_pending !== undefined) dev.ha_setup_pending = d.ha_setup_pending;
+        renderDevices();
+      }
       const grp = groups.find(x => x.group_id === d.id);
       if (grp) { grp.mqtt_exposed = d.mqtt_exposed; renderGroups(); }
     }
-    feedLog('MQTT ' + (d.mqtt_exposed ? 'on' : 'off') + ': #' + d.id);
+    const saved = d.saved === true;
+    $('saveMsg').textContent = saved ? 'MQTT setting saved' : 'MQTT setting was not saved';
+    $('saveMsg').style.color = saved ? 'var(--ok)' : 'var(--err)';
+    if (saved) setTimeout(() => $('saveMsg').textContent = '', 3500);
+    feedLog(saved ? 'MQTT ' + (d.mqtt_exposed ? 'on' : 'off') + ' saved: #' + d.id : 'MQTT save failed: #' + d.id);
   });
 
   evtSource.addEventListener('import_result', e => {
@@ -495,11 +649,14 @@ async function removeDev(id) {
 }
 
 async function toggleMqtt(id, exposed, cb) {
+  if (cb) cb.disabled = true;
   try {
     await postJson('set_mqtt_exposed', {id, exposed});
   } catch(e) {
     if (cb) cb.checked = !exposed;
     feedLog('MQTT toggle failed: ' + e.message);
+  } finally {
+    if (cb) cb.disabled = false;
   }
 }
 
@@ -626,7 +783,14 @@ async function claimDev(hash, idx) {
   btn.disabled = true;
   btn.textContent = 'Claiming\u2026';
   $('claimMsg' + idx).textContent = 'Starting\u2026';
-  await postJson('claim_device', {uuid_hash: parseInt(hash, 16), name, product_type: pt});
+  try {
+    await postJson('claim_device', {uuid_hash: parseInt(hash, 16), name, product_type: pt});
+  } catch (e) {
+    $('claimMsg' + idx).textContent = 'Failed: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = 'Claim';
+    claimingHash = null;
+  }
 }
 
 /* ── Save / Setup ────────────────────────── */
