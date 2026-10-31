@@ -14,7 +14,6 @@
 namespace avionmesh {
 
 #ifdef USE_ESP32
-static const char *NVS_NAMESPACE = "avionmesh";
 static const char *NVS_KEY_DEVICES = "devices";
 static const char *NVS_KEY_GROUPS = "groups";
 static const char *NVS_KEY_PASSPHRASE = "passphrase";
@@ -30,7 +29,7 @@ static const char *NVS_KEY_PASSPHRASE = "passphrase";
 void DeviceDB::load() {
 #ifdef USE_ESP32
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK)
+    if (nvs_open(storage_namespace(), NVS_READONLY, &handle) != ESP_OK)
         return;
 
     /* Load passphrase */
@@ -55,6 +54,8 @@ void DeviceDB::load() {
             d.product_type = buf[pos++];
             uint8_t flags = buf[pos++];
             d.mqtt_exposed = flags & 0x01;
+            d.ha_setup_pending = flags & 0x02;
+            d.ha_local_level = d.product_type == 91 && (flags & 0x04);
             uint8_t name_len = buf[pos++];
             d.name.assign(reinterpret_cast<char *>(&buf[pos]), name_len);
             pos += name_len;
@@ -82,6 +83,7 @@ void DeviceDB::load() {
             pos += 2;
             uint8_t gflags = buf[pos++];
             g.mqtt_exposed = gflags & 0x01;
+            g.ha_event_target = gflags & 0x02;
             uint8_t name_len = buf[pos++];
             g.name.assign(reinterpret_cast<char *>(&buf[pos]), name_len);
             pos += name_len;
@@ -108,19 +110,19 @@ void DeviceDB::end_batch() {
     save();
 }
 
-void DeviceDB::save() {
+bool DeviceDB::save() {
     if (batch_mode_)
-        return;
+        return true;  // Queued in-memory; end_batch() performs the single commit.
 #ifdef USE_ESP32
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)
-        return;
+    if (nvs_open(storage_namespace(), NVS_READWRITE, &handle) != ESP_OK)
+        return false;
 
     /* Save passphrase */
-    if (!passphrase_.empty())
-        nvs_set_str(handle, NVS_KEY_PASSPHRASE, passphrase_.c_str());
-    else
-        nvs_erase_key(handle, NVS_KEY_PASSPHRASE);
+    esp_err_t key_result = !passphrase_.empty()
+                               ? nvs_set_str(handle, NVS_KEY_PASSPHRASE, passphrase_.c_str())
+                               : nvs_erase_key(handle, NVS_KEY_PASSPHRASE);
+    bool ok = key_result == ESP_OK || key_result == ESP_ERR_NVS_NOT_FOUND;
 
     /* Serialize devices */
     std::vector<uint8_t> buf;
@@ -131,7 +133,8 @@ void DeviceDB::save() {
         buf.push_back(d.avion_id & 0xFF);
         buf.push_back(d.avion_id >> 8);
         buf.push_back(d.product_type);
-        buf.push_back(d.mqtt_exposed ? 0x01 : 0x00);
+        buf.push_back((d.mqtt_exposed ? 0x01 : 0x00) | (d.ha_setup_pending ? 0x02 : 0x00) |
+                      (d.ha_local_level ? 0x04 : 0x00));
         buf.push_back(static_cast<uint8_t>(d.name.size()));
         buf.insert(buf.end(), d.name.begin(), d.name.end());
         uint16_t gc = d.groups.size();
@@ -142,7 +145,7 @@ void DeviceDB::save() {
             buf.push_back(gid >> 8);
         }
     }
-    nvs_set_blob(handle, NVS_KEY_DEVICES, buf.data(), buf.size());
+    ok = nvs_set_blob(handle, NVS_KEY_DEVICES, buf.data(), buf.size()) == ESP_OK && ok;
 
     /* Serialize groups */
     buf.clear();
@@ -152,7 +155,7 @@ void DeviceDB::save() {
     for (auto &g : groups_) {
         buf.push_back(g.group_id & 0xFF);
         buf.push_back(g.group_id >> 8);
-        buf.push_back(g.mqtt_exposed ? 0x01 : 0x00);
+        buf.push_back((g.mqtt_exposed ? 0x01 : 0x00) | (g.ha_event_target ? 0x02 : 0x00));
         buf.push_back(static_cast<uint8_t>(g.name.size()));
         buf.insert(buf.end(), g.name.begin(), g.name.end());
         uint16_t mc = g.member_ids.size();
@@ -163,19 +166,53 @@ void DeviceDB::save() {
             buf.push_back(mid >> 8);
         }
     }
-    nvs_set_blob(handle, NVS_KEY_GROUPS, buf.data(), buf.size());
+    ok = nvs_set_blob(handle, NVS_KEY_GROUPS, buf.data(), buf.size()) == ESP_OK && ok;
 
-    nvs_commit(handle);
+    if (ok)
+        ok = nvs_commit(handle) == ESP_OK;
     nvs_close(handle);
+    return ok;
+#else
+    return true;
 #endif
 }
 
-bool DeviceDB::add_device(uint16_t avion_id, uint8_t product_type, const std::string &name) {
+bool DeviceDB::replace_inventory_metadata(std::vector<DeviceEntry> devices,
+                                          std::vector<GroupEntry> groups) {
+    DeviceDB candidate;
+#ifdef AVIONMESH_CLOUD_SCALE_TEST
+    candidate.cloud_scale_storage_ = cloud_scale_storage_;
+#endif
+    candidate.passphrase_ = passphrase_;
+    candidate.devices_ = std::move(devices);
+    candidate.groups_ = std::move(groups);
+    if (!candidate.save())
+        return false;
+    devices_.swap(candidate.devices_);
+    groups_.swap(candidate.groups_);
+    return true;
+}
+
+bool DeviceDB::add_device(uint16_t avion_id, uint8_t product_type, const std::string &name,
+                          bool local_level) {
     if (find_device(avion_id))
         return false;
-    devices_.push_back({avion_id, product_type, name, {}});
+    devices_.push_back({avion_id,
+                        product_type,
+                        name,
+                        {},
+                        controller_ha_default(product_type),
+                        keypad_setup_default(product_type),
+                        product_type == 91 && local_level});
     save();
     return true;
+}
+
+const DeviceEntry *DeviceDB::find_device(uint16_t avion_id) const {
+    for (const auto &device : devices_)
+        if (device.avion_id == avion_id)
+            return &device;
+    return nullptr;
 }
 
 bool DeviceDB::remove_device(uint16_t avion_id) {
@@ -223,7 +260,9 @@ bool DeviceDB::rename_group(uint16_t group_id, const std::string &name) {
     if (name.empty())
         return false;
     auto *grp = find_group(group_id);
-    if (!grp)
+    // Owned event target names encode their controller/slot. Renaming would
+    // break ownership and allow later setup to allocate a second target.
+    if (!grp || grp->ha_event_target || grp->name.rfind("HA event target: ", 0) == 0)
         return false;
     grp->name = name;
     save();
@@ -254,7 +293,7 @@ GroupEntry *DeviceDB::find_group(uint16_t group_id) {
 bool DeviceDB::add_device_to_group(uint16_t avion_id, uint16_t group_id) {
     auto *dev = find_device(avion_id);
     auto *grp = find_group(group_id);
-    if (!dev || !grp)
+    if (!dev || !grp || grp->ha_event_target)
         return false;
 
     if (std::find(dev->groups.begin(), dev->groups.end(), group_id) == dev->groups.end())
@@ -284,7 +323,7 @@ bool DeviceDB::remove_device_from_group(uint16_t avion_id, uint16_t group_id) {
 void DeviceDB::clear() {
 #ifdef USE_ESP32
     nvs_handle_t handle;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)
+    if (nvs_open(storage_namespace(), NVS_READWRITE, &handle) != ESP_OK)
         return;
 
     nvs_erase_key(handle, NVS_KEY_DEVICES);

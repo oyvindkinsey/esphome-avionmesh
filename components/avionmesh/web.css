@@ -65,6 +65,18 @@ body {
 .sse-off { background: var(--err) }
 
 .save-msg { font-size: .8em; color: var(--dim) }
+.button-mapping { font-size: .82em; margin: 10px 0 }
+.button-mapping ul { list-style: none; padding: 0; margin: 0 0 10px }
+.button-mapping li { margin: 6px 0; line-height: 1.35 }
+.button-mapping p { color: var(--dim); line-height: 1.4; margin-top: 8px }
+
+dialog { color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; width: min(480px, calc(100% - 24px)); margin: auto }
+dialog::backdrop { background: rgba(0,0,0,.65) }
+dialog p { margin: 12px 0; line-height: 1.5 }
+dialog label { display: block; margin-top: 14px; margin-bottom: 5px }
+dialog input { width: 100%; margin-bottom: 4px }
+dialog .row { margin-top: 18px }
 
 /* ── Sections ────────────────────────── */
 section { margin-bottom: 20px }
@@ -290,6 +302,7 @@ button.ghost:hover { background: rgba(255,255,255,.06) }
 
 /* ── Text inputs ─────────────────────── */
 input[type=text],
+input[type=email],
 input[type=password],
 input[type=number],
 select {
@@ -379,3 +392,6 @@ td { padding: 5px 6px; border-bottom: 1px solid var(--border) }
 .empty   { color: var(--dim); font-size: .85em; padding: 16px 0; text-align: center }
 .row     { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px }
 .mono    { font-family: monospace }
+
+#cloudSyncSummary:empty { display: none }
+#cloudSyncSummary { margin: 0 0 16px; color: var(--accent2) }
