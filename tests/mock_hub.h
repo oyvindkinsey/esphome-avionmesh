@@ -16,6 +16,8 @@ class TestHub : public AvionMeshHub {
     std::vector<std::tuple<std::string, std::string, bool>> mqtt_publishes;
     std::map<std::string, std::function<void(const std::string &, const std::string &)>> mqtt_subs;
     std::vector<std::pair<std::string, std::string>> sse_events;
+    // What do_sse_emit reports back (false = a client's send buffer was busy)
+    bool sse_accepts{true};
 
     // Call after populating db_ and setting mqtt_exposed flags.
     // Wires discovery_ publish function and subscribes all MQTT command topics.
@@ -122,8 +124,9 @@ class TestHub : public AvionMeshHub {
         mqtt_subs[topic] = std::move(cb);
     }
 
-    void do_sse_emit(const std::string &event, const std::string &data) override {
+    bool do_sse_emit(const std::string &event, const std::string &data) override {
         sse_events.emplace_back(event, data);
+        return sse_accepts;
     }
 };
 
