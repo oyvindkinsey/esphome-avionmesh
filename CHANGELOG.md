@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SSE `state` events are sent only when a device's or group's state
+  changes. The mesh repeats status reports and each light report
+  re-latches its groups, so most events were duplicates. The initial
+  sync's `groups` entries now carry `brightness`/`color_temp` so new
+  clients still get group state.
 - Move to ESPHome's native ESP-IDF toolchain (ESPHome >= 2026.9.0).
   Mesh libraries (avionmesh-cpp v1.1.3 with recsrmesh-cpp v1.1.3) are
   consumed as a converted IDF library; the PlatformIO `lib_deps` path

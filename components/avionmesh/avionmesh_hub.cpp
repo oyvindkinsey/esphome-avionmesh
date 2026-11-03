@@ -1689,7 +1689,14 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
             discovery_.publish_color_temp_state(avion_id, state.color_temp);
     }
 
-    {
+    // The mesh repeats status reports, and every light report re-latches its
+    // groups, so most calls carry no change. Only tell SSE clients about changes;
+    // new clients get the current state in their initial sync. If a client
+    // couldn't take the event, don't record it, so the next report retries.
+    bool sse_changed = !state.sse_sent || state.sse_brightness != state.brightness ||
+                       state.sse_color_temp_known != state.color_temp_known ||
+                       (state.color_temp_known && state.sse_color_temp != state.color_temp);
+    if (sse_changed) {
         char buf[128];
         int len;
         if (state.color_temp_known) {
@@ -1700,7 +1707,12 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
             len = snprintf(buf, sizeof(buf), "{\"avion_id\":%u,\"brightness\":%u}", avion_id,
                            state.brightness);
         }
-        do_sse_emit("state", std::string(buf, len));
+        if (do_sse_emit("state", std::string(buf, len))) {
+            state.sse_sent = true;
+            state.sse_brightness = state.brightness;
+            state.sse_color_temp = state.color_temp;
+            state.sse_color_temp_known = state.color_temp_known;
+        }
     }
 }
 
@@ -1772,6 +1784,17 @@ std::string AvionMeshHub::build_sync_groups_json(size_t start, size_t count) con
         }
         json += "],\"mqtt_exposed\":";
         json += grp.mqtt_exposed ? "true" : "false";
+
+        // Group state is otherwise only sent as "state" events on change
+        auto sit = device_states_.find(grp.group_id);
+        if (sit != device_states_.end() && sit->second.brightness_known) {
+            json += ",\"brightness\":";
+            json += std::to_string(sit->second.brightness);
+            if (sit->second.color_temp_known) {
+                json += ",\"color_temp\":";
+                json += std::to_string(sit->second.color_temp);
+            }
+        }
         json += "}";
     }
     json += "]}";
@@ -1813,14 +1836,15 @@ void AvionMeshHub::do_mqtt_subscribe(
 #endif
 }
 
-void AvionMeshHub::do_sse_emit(const std::string &event, const std::string &data) {
+bool AvionMeshHub::do_sse_emit(const std::string &event, const std::string &data) {
 #ifdef USE_ESP32
     if (web_handler_)
-        web_handler_->send_event(event.c_str(), data);
+        return web_handler_->send_event(event.c_str(), data);
 #else
     (void)event;
     (void)data;
 #endif
+    return true;
 }
 
 /* ---- Group state latch ---- */

@@ -169,10 +169,13 @@ void SseSession::loop() {
 // AvionMeshWebHandler — SSE broadcast / sync
 // ---------------------------------------------------------------------------
 
-void AvionMeshWebHandler::send_event(const char *event, const std::string &data) {
+bool AvionMeshWebHandler::send_event(const char *event, const std::string &data) {
+    bool all_sent = true;
     for (auto *ses : sse_sessions_) {
-        ses->send(event, data);
+        if (!ses->send(event, data))
+            all_sent = false;
     }
+    return all_sent;
 }
 
 void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
