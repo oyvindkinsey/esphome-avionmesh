@@ -63,7 +63,6 @@ class AvionMeshWebHandler : public AsyncWebHandler {
     bool body_too_big_{false};
 
     void send_initial_sync(SseSession *session);
-    bool any_light_state_unknown() const;
 
     void handle_index(AsyncWebServerRequest *request);
     void handle_events(AsyncWebServerRequest *request);

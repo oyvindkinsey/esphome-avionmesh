@@ -90,6 +90,10 @@ class AvionMeshHub : public esphome::Component {
     void set_passphrase(const std::string &passphrase) { passphrase_ = passphrase; }
     void set_single_device(bool single_device) { single_device_ = single_device; }
 
+    // True while some dimmable device's brightness — or some CT-capable
+    // device's color temp — is still unknown; paces the SSE per-session re-read
+    bool any_light_state_unknown() const;
+
     // Initial-sync batch payload builders; kept here (host-compiled) so the
     // sync JSON is testable — the web handler only batches and pushes
     std::string build_sync_devices_json(size_t start, size_t count) const;
