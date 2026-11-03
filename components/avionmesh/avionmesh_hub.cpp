@@ -1716,6 +1716,19 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
     }
 }
 
+bool AvionMeshHub::any_light_state_unknown() const {
+    for (auto &dev : db_.devices()) {
+        if (!has_dimming(dev.product_type))
+            continue;
+        auto sit = device_states_.find(dev.avion_id);
+        if (sit == device_states_.end() || !sit->second.brightness_known)
+            return true;
+        if (has_color_temp(dev.product_type) && !sit->second.color_temp_known)
+            return true;
+    }
+    return false;
+}
+
 std::string AvionMeshHub::build_sync_devices_json(size_t start, size_t count) const {
     std::string json = "{\"devices\":[";
     auto &devs = db_.devices();
