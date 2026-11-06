@@ -55,6 +55,8 @@ set(SOURCES
     test_group_latch_v2.cpp
     test_mqtt_commands.cpp
     test_sse_events.cpp
+    test_json_escape.cpp
+    test_sync_json.cpp
     test_api_control.cpp
     test_discover_ping.cpp
     test_uuid_identity.cpp

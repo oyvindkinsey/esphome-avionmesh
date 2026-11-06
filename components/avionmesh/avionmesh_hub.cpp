@@ -2,6 +2,7 @@
 #ifdef USE_ESP32
 #include "avionmesh_web.h"
 #endif
+#include "json_escape.h"
 
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
@@ -525,8 +526,9 @@ void AvionMeshHub::loop() {
                      "{\"action\":\"claim_device\",\"status\":\"error\",\"message\":\"%s\"}",
                      errmsg);
             send_response(buf);
-            char sse[160];
-            snprintf(sse, sizeof(sse), "{\"status\":\"error\",\"message\":\"%s\"}", errmsg);
+            std::string sse = "{\"status\":\"error\",\"message\":";
+            append_json_string(sse, errmsg);
+            sse += "}";
             do_sse_emit("claim_result", sse);
         } else if (esphome::millis() - association_start_ms_ > ASSOCIATION_TIMEOUT_MS) {
             ESP_LOGE(TAG, "Association timed out (state=%s)",
@@ -581,9 +583,9 @@ void AvionMeshHub::process_deferred_actions() {
                     if (dev) {
                         std::string json = "{\"avion_id\":";
                         json += std::to_string(dev->avion_id);
-                        json += ",\"name\":\"";
-                        json += dev->name;
-                        json += "\",\"product_type\":";
+                        json += ",\"name\":";
+                        append_json_string(json, dev->name);
+                        json += ",\"product_type\":";
                         json += std::to_string(dev->product_type);
                         json += ",\"product_name\":\"";
                         json += product_name(dev->product_type);
@@ -608,9 +610,9 @@ void AvionMeshHub::process_deferred_actions() {
                     handle_create_group(group_id, act.name);
                     std::string json = "{\"group_id\":";
                     json += std::to_string(group_id);
-                    json += ",\"name\":\"";
-                    json += act.name;
-                    json += "\",\"members\":[],\"mqtt_exposed\":false}";
+                    json += ",\"name\":";
+                    append_json_string(json, act.name);
+                    json += ",\"members\":[],\"mqtt_exposed\":false}";
                     do_sse_emit("group_added", json);
                 }
                 break;
@@ -632,9 +634,9 @@ void AvionMeshHub::process_deferred_actions() {
                     if (grp) {
                         std::string json = "{\"group_id\":";
                         json += std::to_string(grp->group_id);
-                        json += ",\"name\":\"";
-                        json += grp->name;
-                        json += "\",\"members\":[";
+                        json += ",\"name\":";
+                        append_json_string(json, grp->name);
+                        json += ",\"members\":[";
                         for (size_t i = 0; i < grp->member_ids.size(); i++) {
                             if (i > 0)
                                 json += ",";
@@ -653,9 +655,9 @@ void AvionMeshHub::process_deferred_actions() {
                     if (grp) {
                         std::string json = "{\"group_id\":";
                         json += std::to_string(grp->group_id);
-                        json += ",\"name\":\"";
-                        json += grp->name;
-                        json += "\",\"members\":[";
+                        json += ",\"name\":";
+                        append_json_string(json, grp->name);
+                        json += ",\"members\":[";
                         for (size_t i = 0; i < grp->member_ids.size(); i++) {
                             if (i > 0)
                                 json += ",";
@@ -841,10 +843,12 @@ void AvionMeshHub::process_deferred_actions() {
                         discovery_.publish_light(
                             dev->avion_id, dev->name, has_dimming(dev->product_type),
                             has_color_temp(dev->product_type), product_name(dev->product_type));
-                    char buf[160];
-                    snprintf(buf, sizeof(buf), "{\"avion_id\":%u,\"name\":\"%s\"}", dev->avion_id,
-                             dev->name.c_str());
-                    do_sse_emit("device_updated", buf);
+                    std::string json = "{\"avion_id\":";
+                    json += std::to_string(dev->avion_id);
+                    json += ",\"name\":";
+                    append_json_string(json, dev->name);
+                    json += "}";
+                    do_sse_emit("device_updated", json);
                 }
                 break;
             }
@@ -854,10 +858,12 @@ void AvionMeshHub::process_deferred_actions() {
                 if (grp && db_.rename_group(act.id1, act.name)) {
                     if (grp->mqtt_exposed)
                         discovery_.publish_light(grp->group_id, grp->name, true, true);
-                    char buf[160];
-                    snprintf(buf, sizeof(buf), "{\"group_id\":%u,\"name\":\"%s\"}", grp->group_id,
-                             grp->name.c_str());
-                    do_sse_emit("group_updated", buf);
+                    std::string json = "{\"group_id\":";
+                    json += std::to_string(grp->group_id);
+                    json += ",\"name\":";
+                    append_json_string(json, grp->name);
+                    json += "}";
+                    do_sse_emit("group_updated", json);
                 }
                 break;
             }
@@ -1696,6 +1702,80 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
         }
         do_sse_emit("state", std::string(buf, len));
     }
+}
+
+std::string AvionMeshHub::build_sync_devices_json(size_t start, size_t count) const {
+    std::string json = "{\"devices\":[";
+    auto &devs = db_.devices();
+    size_t end = start + count;
+    if (end > devs.size())
+        end = devs.size();
+    for (size_t j = start; j < end; j++) {
+        auto &dev = devs[j];
+        if (j > start)
+            json += ",";
+        json += "{\"avion_id\":";
+        json += std::to_string(dev.avion_id);
+        json += ",\"name\":";
+        append_json_string(json, dev.name);
+        json += ",\"product_type\":";
+        json += std::to_string(dev.product_type);
+        json += ",\"product_name\":\"";
+        json += product_name(dev.product_type);
+        json += "\",\"groups\":[";
+        for (size_t g = 0; g < dev.groups.size(); g++) {
+            if (g > 0)
+                json += ",";
+            json += std::to_string(dev.groups[g]);
+        }
+        json += "],\"mqtt_exposed\":";
+        json += dev.mqtt_exposed ? "true" : "false";
+        json += ",\"has_dimming\":";
+        json += has_dimming(dev.product_type) ? "true" : "false";
+        json += ",\"has_color_temp\":";
+        json += has_color_temp(dev.product_type) ? "true" : "false";
+
+        auto sit = device_states_.find(dev.avion_id);
+        if (sit != device_states_.end() && sit->second.brightness_known) {
+            json += ",\"brightness\":";
+            json += std::to_string(sit->second.brightness);
+            if (sit->second.color_temp_known) {
+                json += ",\"color_temp\":";
+                json += std::to_string(sit->second.color_temp);
+            }
+        }
+        json += "}";
+    }
+    json += "]}";
+    return json;
+}
+
+std::string AvionMeshHub::build_sync_groups_json(size_t start, size_t count) const {
+    std::string json = "{\"groups\":[";
+    auto &grps = db_.groups();
+    size_t end = start + count;
+    if (end > grps.size())
+        end = grps.size();
+    for (size_t j = start; j < end; j++) {
+        auto &grp = grps[j];
+        if (j > start)
+            json += ",";
+        json += "{\"group_id\":";
+        json += std::to_string(grp.group_id);
+        json += ",\"name\":";
+        append_json_string(json, grp.name);
+        json += ",\"members\":[";
+        for (size_t m = 0; m < grp.member_ids.size(); m++) {
+            if (m > 0)
+                json += ",";
+            json += std::to_string(grp.member_ids[m]);
+        }
+        json += "],\"mqtt_exposed\":";
+        json += grp.mqtt_exposed ? "true" : "false";
+        json += "}";
+    }
+    json += "]}";
+    return json;
 }
 
 /* ---- Virtual seam default implementations ---- */

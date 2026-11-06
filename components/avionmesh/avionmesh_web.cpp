@@ -1,5 +1,6 @@
 #include "avionmesh_web.h"
 #include "avionmesh_hub.h"
+#include "json_escape.h"
 #include "web_content.h"
 
 #include "esphome/core/log.h"
@@ -176,7 +177,6 @@ void AvionMeshWebHandler::send_event(const char *event, const std::string &data)
 
 void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
     auto &db = hub_->db_;
-    auto &states = hub_->device_states_;
 
     // Meta event
     {
@@ -194,46 +194,8 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
         auto &devs = db.devices();
         static constexpr size_t BATCH = 5;
         for (size_t i = 0; i < devs.size(); i += BATCH) {
-            std::string json = "{\"devices\":[";
-            size_t end = std::min(i + BATCH, devs.size());
-            for (size_t j = i; j < end; j++) {
-                auto &dev = devs[j];
-                if (j > i)
-                    json += ",";
-                json += "{\"avion_id\":";
-                json += std::to_string(dev.avion_id);
-                json += ",\"name\":\"";
-                json += dev.name;
-                json += "\",\"product_type\":";
-                json += std::to_string(dev.product_type);
-                json += ",\"product_name\":\"";
-                json += product_name(dev.product_type);
-                json += "\",\"groups\":[";
-                for (size_t g = 0; g < dev.groups.size(); g++) {
-                    if (g > 0)
-                        json += ",";
-                    json += std::to_string(dev.groups[g]);
-                }
-                json += "],\"mqtt_exposed\":";
-                json += dev.mqtt_exposed ? "true" : "false";
-                json += ",\"has_dimming\":";
-                json += has_dimming(dev.product_type) ? "true" : "false";
-                json += ",\"has_color_temp\":";
-                json += has_color_temp(dev.product_type) ? "true" : "false";
-
-                auto sit = states.find(dev.avion_id);
-                if (sit != states.end() && sit->second.brightness_known) {
-                    json += ",\"brightness\":";
-                    json += std::to_string(sit->second.brightness);
-                    if (sit->second.color_temp_known) {
-                        json += ",\"color_temp\":";
-                        json += std::to_string(sit->second.color_temp);
-                    }
-                }
-                json += "}";
-            }
-            json += "]}";
-            session->send("devices", json);
+            size_t n = std::min(BATCH, devs.size() - i);
+            session->send("devices", hub_->build_sync_devices_json(i, n));
             if (session->dead())
                 return;
         }
@@ -244,28 +206,8 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
         auto &grps = db.groups();
         static constexpr size_t BATCH = 5;
         for (size_t i = 0; i < grps.size(); i += BATCH) {
-            std::string json = "{\"groups\":[";
-            size_t end = std::min(i + BATCH, grps.size());
-            for (size_t j = i; j < end; j++) {
-                auto &grp = grps[j];
-                if (j > i)
-                    json += ",";
-                json += "{\"group_id\":";
-                json += std::to_string(grp.group_id);
-                json += ",\"name\":\"";
-                json += grp.name;
-                json += "\",\"members\":[";
-                for (size_t m = 0; m < grp.member_ids.size(); m++) {
-                    if (m > 0)
-                        json += ",";
-                    json += std::to_string(grp.member_ids[m]);
-                }
-                json += "],\"mqtt_exposed\":";
-                json += grp.mqtt_exposed ? "true" : "false";
-                json += "}";
-            }
-            json += "]}";
-            session->send("groups", json);
+            size_t n = std::min(BATCH, grps.size() - i);
+            session->send("groups", hub_->build_sync_groups_json(i, n));
             if (session->dead())
                 return;
         }
@@ -852,41 +794,6 @@ void AvionMeshWebHandler::handle_save(AsyncWebServerRequest *request) {
     }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
-
-namespace {
-// Minimal JSON string escaping for device/group names.
-void append_json_string(std::string &out, const std::string &s) {
-    out += '"';
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    out += '"';
-}
-}  // namespace
 
 void AvionMeshWebHandler::handle_export(AsyncWebServerRequest *request) {
     // The passphrase is always included: a backup without the key cannot
