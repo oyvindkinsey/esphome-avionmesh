@@ -88,3 +88,12 @@ TEST_F(SyncJsonTest, GroupsBatchValid) {
     EXPECT_EQ(100u, grps[0]["members"][0].as<uint32_t>());
     EXPECT_FALSE(grps[0]["mqtt_exposed"].as<bool>());
 }
+
+TEST_F(SyncJsonTest, GroupsBatchCarriesStateWhenKnown) {
+    hub.states()[256].brightness = 128;
+    hub.states()[256].brightness_known = true;
+    JsonDocument doc;
+    ASSERT_FALSE(deserializeJson(doc, hub.build_sync_groups_json(0, 5)));
+    EXPECT_EQ(128, doc["groups"][0]["brightness"].as<int>());
+    EXPECT_TRUE(doc["groups"][0]["color_temp"].isNull());
+}
