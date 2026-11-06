@@ -1,5 +1,6 @@
 #include "avionmesh_web.h"
 #include "avionmesh_hub.h"
+#include "json_escape.h"
 #include "web_content.h"
 
 #include "esphome/core/log.h"
@@ -202,9 +203,9 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                     json += ",";
                 json += "{\"avion_id\":";
                 json += std::to_string(dev.avion_id);
-                json += ",\"name\":\"";
-                json += dev.name;
-                json += "\",\"product_type\":";
+                json += ",\"name\":";
+                append_json_string(json, dev.name);
+                json += ",\"product_type\":";
                 json += std::to_string(dev.product_type);
                 json += ",\"product_name\":\"";
                 json += product_name(dev.product_type);
@@ -252,9 +253,9 @@ void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
                     json += ",";
                 json += "{\"group_id\":";
                 json += std::to_string(grp.group_id);
-                json += ",\"name\":\"";
-                json += grp.name;
-                json += "\",\"members\":[";
+                json += ",\"name\":";
+                append_json_string(json, grp.name);
+                json += ",\"members\":[";
                 for (size_t m = 0; m < grp.member_ids.size(); m++) {
                     if (m > 0)
                         json += ",";
@@ -852,41 +853,6 @@ void AvionMeshWebHandler::handle_save(AsyncWebServerRequest *request) {
     }
     send_json(request, 200, "{\"status\":\"ok\"}");
 }
-
-namespace {
-// Minimal JSON string escaping for device/group names.
-void append_json_string(std::string &out, const std::string &s) {
-    out += '"';
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    out += '"';
-}
-}  // namespace
 
 void AvionMeshWebHandler::handle_export(AsyncWebServerRequest *request) {
     // The passphrase is always included: a backup without the key cannot

@@ -100,6 +100,14 @@ class TestHub : public AvionMeshHub {
         sse_events.clear();
     }
 
+    // Last captured SSE event with this name, or nullptr.
+    const std::pair<std::string, std::string> *last_sse_event(const std::string &name) {
+        for (auto it = sse_events.rbegin(); it != sse_events.rend(); ++it)
+            if (it->first == name)
+                return &*it;
+        return nullptr;
+    }
+
  protected:
     void do_mesh_send(const Command &cmd) override { mesh_sends.push_back(cmd); }
 
