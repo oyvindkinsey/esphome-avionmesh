@@ -42,6 +42,10 @@ All endpoints: `POST`, `Content-Type: application/json`, except `/api/events`.
 
 Emitted to all connected clients. An initial sync is sent to each new client on connect.
 
+> The event stream is internal to the bundled Web UI; its format is not a
+> stable public API and may change between releases. Use MQTT for
+> integrations.
+
 | Event | Payload fields |
 |-------|----------------|
 | `meta` | `ble_state`, `rx_count` |
