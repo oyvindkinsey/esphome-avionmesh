@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include "controller_bindings.h"
 
 namespace avionmesh {
 
@@ -19,6 +20,16 @@ class MqttDiscovery {
                        bool has_color_temp, const std::string &product_name = "");
 
     void remove_light(uint16_t avion_id);
+    void publish_controller(uint16_t avion_id, const std::string &name, const std::string &model);
+    void remove_controller(uint16_t avion_id);
+    void publish_controller_actions(uint16_t avion_id, uint8_t product, const std::string &name,
+                                    const ControllerBindingSnapshot *snapshot,
+                                    bool local_level = false);
+    std::string controller_action_topic(uint16_t avion_id, const std::string &action) const;
+    std::string controller_event_topic(uint16_t avion_id) const;
+    std::string controller_discovery_topic(uint16_t avion_id) const;
+    std::string controller_availability_topic() const;
+    std::string controller_input_availability_topic(uint16_t avion_id) const;
 
     void publish_on_off_state(uint16_t avion_id, bool on);
     void publish_brightness_state(uint16_t avion_id, uint8_t brightness);
