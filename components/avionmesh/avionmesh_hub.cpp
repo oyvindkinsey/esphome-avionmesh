@@ -1704,6 +1704,80 @@ void AvionMeshHub::publish_device_state(uint16_t avion_id) {
     }
 }
 
+std::string AvionMeshHub::build_sync_devices_json(size_t start, size_t count) const {
+    std::string json = "{\"devices\":[";
+    auto &devs = db_.devices();
+    size_t end = start + count;
+    if (end > devs.size())
+        end = devs.size();
+    for (size_t j = start; j < end; j++) {
+        auto &dev = devs[j];
+        if (j > start)
+            json += ",";
+        json += "{\"avion_id\":";
+        json += std::to_string(dev.avion_id);
+        json += ",\"name\":";
+        append_json_string(json, dev.name);
+        json += ",\"product_type\":";
+        json += std::to_string(dev.product_type);
+        json += ",\"product_name\":\"";
+        json += product_name(dev.product_type);
+        json += "\",\"groups\":[";
+        for (size_t g = 0; g < dev.groups.size(); g++) {
+            if (g > 0)
+                json += ",";
+            json += std::to_string(dev.groups[g]);
+        }
+        json += "],\"mqtt_exposed\":";
+        json += dev.mqtt_exposed ? "true" : "false";
+        json += ",\"has_dimming\":";
+        json += has_dimming(dev.product_type) ? "true" : "false";
+        json += ",\"has_color_temp\":";
+        json += has_color_temp(dev.product_type) ? "true" : "false";
+
+        auto sit = device_states_.find(dev.avion_id);
+        if (sit != device_states_.end() && sit->second.brightness_known) {
+            json += ",\"brightness\":";
+            json += std::to_string(sit->second.brightness);
+            if (sit->second.color_temp_known) {
+                json += ",\"color_temp\":";
+                json += std::to_string(sit->second.color_temp);
+            }
+        }
+        json += "}";
+    }
+    json += "]}";
+    return json;
+}
+
+std::string AvionMeshHub::build_sync_groups_json(size_t start, size_t count) const {
+    std::string json = "{\"groups\":[";
+    auto &grps = db_.groups();
+    size_t end = start + count;
+    if (end > grps.size())
+        end = grps.size();
+    for (size_t j = start; j < end; j++) {
+        auto &grp = grps[j];
+        if (j > start)
+            json += ",";
+        json += "{\"group_id\":";
+        json += std::to_string(grp.group_id);
+        json += ",\"name\":";
+        append_json_string(json, grp.name);
+        json += ",\"members\":[";
+        for (size_t m = 0; m < grp.member_ids.size(); m++) {
+            if (m > 0)
+                json += ",";
+            json += std::to_string(grp.member_ids[m]);
+        }
+        json += "],\"mqtt_exposed\":";
+        json += grp.mqtt_exposed ? "true" : "false";
+        json += "}";
+    }
+    json += "]}";
+    return json;
+}
+
 /* ---- Virtual seam default implementations ---- */
 
 void AvionMeshHub::do_mesh_send(const Command &cmd) {

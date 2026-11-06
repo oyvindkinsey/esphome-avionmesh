@@ -85,6 +85,11 @@ class AvionMeshHub : public esphome::Component {
     void set_passphrase(const std::string &passphrase) { passphrase_ = passphrase; }
     void set_single_device(bool single_device) { single_device_ = single_device; }
 
+    // Initial-sync batch payload builders; kept here (host-compiled) so the
+    // sync JSON is testable — the web handler only batches and pushes
+    std::string build_sync_devices_json(size_t start, size_t count) const;
+    std::string build_sync_groups_json(size_t start, size_t count) const;
+
     void setup() override;
     void loop() override;
     void dump_config() override;
