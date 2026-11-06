@@ -80,11 +80,96 @@ TEST_F(SseEventTest, StateJsonFormat_NoColorTemp) {
 
 TEST_F(SseEventTest, StateJsonFormat_WithColorTemp) {
     hub.inject_brightness(DEV_A, 77);
-    hub.inject_color_temp(DEV_A, 3000);
     hub.clear_captures();
-    hub.inject_color_temp(DEV_A, 3000);  // trigger publish with known CT
+    hub.inject_color_temp(DEV_A, 3000);  // CT becomes known
 
     ASSERT_FALSE(hub.sse_events.empty());
     auto &json = hub.sse_events.back().second;
     EXPECT_NE(json.find("\"color_temp\":3000"), std::string::npos);
+}
+
+TEST_F(SseEventTest, RepeatedReport_NoDuplicateStateEvent) {
+    hub.inject_brightness(DEV_A, 128);
+    hub.clear_captures();
+
+    hub.inject_brightness(DEV_A, 128);  // mesh re-reports the same value
+
+    EXPECT_TRUE(hub.sse_events.empty()) << "unchanged state must not be re-sent";
+}
+
+TEST_F(SseEventTest, RepeatedReport_ChangeStillEmitted) {
+    hub.inject_brightness(DEV_A, 128);
+    hub.inject_brightness(DEV_A, 128);
+    hub.clear_captures();
+
+    hub.inject_brightness(DEV_A, 0);
+
+    ASSERT_EQ(hub.sse_events.size(), 1u);
+    EXPECT_NE(hub.sse_events[0].second.find("\"brightness\":0"), std::string::npos);
+}
+
+TEST_F(SseEventTest, RepeatedReport_NoDuplicateGroupStateEvent) {
+    hub.db().add_device(DEV_B, 90, "Light B");
+    hub.db().add_group(GROUP_1, "Group 1");
+    hub.db().add_device_to_group(DEV_A, GROUP_1);
+    hub.db().add_device_to_group(DEV_B, GROUP_1);
+    hub.test_setup();
+
+    hub.inject_brightness(DEV_A, 100);
+    hub.inject_brightness(DEV_B, 100);
+    hub.clear_captures();
+
+    // A full mesh read re-reports both lights; each report re-latches the group
+    hub.inject_brightness(DEV_A, 100);
+    hub.inject_brightness(DEV_B, 100);
+
+    EXPECT_TRUE(hub.sse_events.empty()) << "re-latching an unchanged group must not re-send it";
+}
+
+TEST_F(SseEventTest, RepeatedReport_RetriedAfterDroppedEvent) {
+    hub.sse_accepts = false;            // a client's send buffer is busy
+    hub.inject_brightness(DEV_A, 128);  // this event doesn't reach it
+    hub.sse_accepts = true;
+    hub.clear_captures();
+
+    hub.inject_brightness(DEV_A, 128);  // the next identical report
+
+    ASSERT_EQ(hub.sse_events.size(), 1u) << "a dropped state must be re-sent on the next report";
+    EXPECT_NE(hub.sse_events[0].second.find("\"brightness\":128"), std::string::npos);
+}
+
+TEST_F(SseEventTest, Pacing_EmptyDb_NotUnknown) {
+    TestHub fresh;
+    fresh.test_setup();
+    EXPECT_FALSE(fresh.any_light_state_unknown());
+}
+
+TEST_F(SseEventTest, Pacing_DimmerBrightnessUnknown_IsUnknown) {
+    EXPECT_TRUE(hub.any_light_state_unknown());
+    hub.inject_brightness(DEV_A, 100);
+    EXPECT_FALSE(hub.any_light_state_unknown());
+}
+
+TEST_F(SseEventTest, Pacing_CtBulbColorTempUnknown_IsUnknown) {
+    static constexpr uint16_t DEV_CT = 32902;
+    static constexpr uint8_t PRODUCT_SMART_BULB = 134;
+    hub.db().add_device(DEV_CT, PRODUCT_SMART_BULB, "CT bulb");
+    hub.test_setup();
+
+    hub.inject_brightness(DEV_A, 100);
+    hub.inject_brightness(DEV_CT, 100);
+    EXPECT_TRUE(hub.any_light_state_unknown()) << "CT-capable light with unknown CT must pace fast";
+
+    hub.inject_color_temp(DEV_CT, 2700);
+    EXPECT_FALSE(hub.any_light_state_unknown());
+}
+
+TEST_F(SseEventTest, Pacing_NonDimmingDeviceIgnored) {
+    static constexpr uint16_t DEV_SWITCH = 32903;
+    static constexpr uint8_t PRODUCT_SMART_SWITCH = 167;
+    hub.db().add_device(DEV_SWITCH, PRODUCT_SMART_SWITCH, "Switch");
+    hub.test_setup();
+
+    hub.inject_brightness(DEV_A, 100);
+    EXPECT_FALSE(hub.any_light_state_unknown());
 }

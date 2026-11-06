@@ -42,18 +42,22 @@ All endpoints: `POST`, `Content-Type: application/json`, except `/api/events`.
 
 Emitted to all connected clients. An initial sync is sent to each new client on connect.
 
+> The event stream is internal to the bundled Web UI; its format is not a
+> stable public API and may change between releases. Use MQTT for
+> integrations.
+
 | Event | Payload fields |
 |-------|----------------|
 | `meta` | `ble_state`, `rx_count` |
 | `devices` | `devices[]` — each: `avion_id`, `name`, `product_type`, `product_name`, `groups`, `mqtt_exposed`, `has_dimming`, `has_color_temp`, `min_brightness`, optionally `brightness`, `color_temp` |
-| `groups` | `groups[]` |
+| `groups` | `groups[]` — each: `group_id`, `name`, `members`, `mqtt_exposed`, optionally `brightness`, `color_temp` |
 | `sync_complete` | _(none)_ |
 | `device_added` | `avion_id`, `name`, `product_type`, `product_name`, `groups`, `mqtt_exposed`, `has_dimming`, `has_color_temp`, `min_brightness` |
 | `device_removed` | `avion_id` |
 | `group_added` | `group_id`, `name`, `members`, `mqtt_exposed` |
 | `group_removed` | `group_id` |
 | `group_updated` | `group_id`, `members` |
-| `state` | `avion_id`, `brightness`, `color_temp` (optional) |
+| `state` | `avion_id`, `brightness`, `color_temp` (optional) — sent only when a device's or group's state changes; the initial sync carries the current state |
 | `mesh_status` | `mesh_mqtt_exposed` |
 | `discover_mesh` | `devices[]` — each: `device_id`, `fw`, `vendor_id`, `csr_product_id`, `known`, `short` (true when the ping reply was too short to carry fw/vendor/product fields; the other fields are then zero) |
 | `scan_unassoc` | `devices[]` — each: `uuid_hash`, `vendor_code`, `product_code` (decoded from the UUID announce; the Web UI preselects the device type from these) |

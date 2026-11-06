@@ -49,6 +49,11 @@ struct DeviceState {
     uint16_t color_temp{0};
     bool brightness_known{false};
     bool color_temp_known{false};
+    // Last values sent as an SSE "state" event, so repeats can be skipped
+    bool sse_sent{false};
+    uint8_t sse_brightness{0};
+    uint16_t sse_color_temp{0};
+    bool sse_color_temp_known{false};
 };
 
 // Vendor/product codes from a device UUID announce. Byte layout matches the
@@ -84,6 +89,10 @@ class AvionMeshHub : public esphome::Component {
  public:
     void set_passphrase(const std::string &passphrase) { passphrase_ = passphrase; }
     void set_single_device(bool single_device) { single_device_ = single_device; }
+
+    // True while some dimmable device's brightness — or some CT-capable
+    // device's color temp — is still unknown; paces the SSE per-session re-read
+    bool any_light_state_unknown() const;
 
     // Initial-sync batch payload builders; kept here (host-compiled) so the
     // sync JSON is testable — the web handler only batches and pushes
@@ -251,7 +260,8 @@ class AvionMeshHub : public esphome::Component {
     virtual void do_mqtt_publish(const std::string &topic, const std::string &payload, bool retain);
     virtual void do_mqtt_subscribe(
         const std::string &topic, std::function<void(const std::string &, const std::string &)> cb);
-    virtual void do_sse_emit(const std::string &event, const std::string &data);
+    // Returns false if some SSE client didn't get the event
+    virtual bool do_sse_emit(const std::string &event, const std::string &data);
 };
 
 }  // namespace avionmesh

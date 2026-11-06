@@ -46,7 +46,8 @@ class AvionMeshWebHandler : public AsyncWebHandler {
     void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index,
                     size_t total) override;
 
-    void send_event(const char *event, const std::string &data);
+    // Returns false if any session couldn't take the event (send buffer still busy)
+    bool send_event(const char *event, const std::string &data);
     void sse_loop();
     void reset_sync();
 

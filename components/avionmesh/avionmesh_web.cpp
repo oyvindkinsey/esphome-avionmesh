@@ -169,10 +169,13 @@ void SseSession::loop() {
 // AvionMeshWebHandler — SSE broadcast / sync
 // ---------------------------------------------------------------------------
 
-void AvionMeshWebHandler::send_event(const char *event, const std::string &data) {
+bool AvionMeshWebHandler::send_event(const char *event, const std::string &data) {
+    bool all_sent = true;
     for (auto *ses : sse_sessions_) {
-        ses->send(event, data);
+        if (!ses->send(event, data))
+            all_sent = false;
     }
+    return all_sent;
 }
 
 void AvionMeshWebHandler::send_initial_sync(SseSession *session) {
@@ -253,9 +256,15 @@ void AvionMeshWebHandler::sse_loop() {
         ++i;
     }
 
+    // The initial sync already carried the cached state, and the mesh reports
+    // changes as they happen, so re-read it often only while a light's state is
+    // still unknown. Otherwise a client that reconnects often turns into a
+    // mesh-wide read (and a burst of reports) on every reconnect. The slow
+    // re-read still picks up any status report the bridge missed.
     if (did_sync && hub_->mesh_initialized_) {
         uint32_t now = esphome::millis();
-        if (now - last_state_read_ms_ > 10000) {
+        uint32_t min_gap = hub_->any_light_state_unknown() ? 10000 : 300000;
+        if (now - last_state_read_ms_ > min_gap) {
             last_state_read_ms_ = now;
             hub_->read_all_dimming();
             hub_->set_timeout("sse_color_read", 1000, [this]() { hub_->read_all_color(); });

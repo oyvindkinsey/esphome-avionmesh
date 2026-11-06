@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Web UI efficiency: `state` events on the `/api/events` stream (internal
+  to the UI) are sent only when a device's or group's state changes. The
+  mesh repeats status reports and each light report re-latches its
+  groups, so most events were duplicates. The initial sync's `groups`
+  entries now carry `brightness`/`color_temp` so a reloading UI still
+  gets group state.
+- Web UI efficiency: a new `/api/events` session triggers a mesh-wide
+  state read at most every 5 min once every light's state is known
+  (was every 10 s); the initial sync carries the cached state. While
+  some light hasn't reported yet the 10 s limit still applies.
 - Move to ESPHome's native ESP-IDF toolchain (ESPHome >= 2026.9.0).
   Mesh libraries (avionmesh-cpp v1.1.3 with recsrmesh-cpp v1.1.3) are
   consumed as a converted IDF library; the PlatformIO `lib_deps` path
